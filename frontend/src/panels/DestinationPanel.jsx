@@ -69,7 +69,7 @@ export default function DestinationPanel({
             />
           </Field>
         )}
-        {user.role === 'broadcaster' && (
+        {(user.role === 'broadcaster' || user.role === 'admin') && (
           <Field>
             <span>Stream-Key</span>
             <KeyInput>

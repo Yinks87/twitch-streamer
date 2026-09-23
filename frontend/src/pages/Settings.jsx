@@ -85,7 +85,7 @@ export default function Settings() {
         restartIntervalSeconds: Number(settings.restartIntervalSeconds),
         restartDelaySeconds: Number(settings.restartDelaySeconds),
       };
-      if (user.role === 'broadcaster') payload.streamKey = settings.streamKey;
+      if (user.role === 'broadcaster' || user.role === 'admin') payload.streamKey = settings.streamKey;
       const saved = await api.saveSettings(payload);
       setSettings(saved);
       setMessage({ type: 'info', text: 'Einstellungen gespeichert.' });
@@ -141,7 +141,7 @@ export default function Settings() {
           onSave={handleSaveSettings}
         />
 
-        {user.role === 'broadcaster' && (
+        {(user.role === 'broadcaster' || user.role === 'admin') && (
           <UserManagementPanelFile setMessage={setMessage} />
         )}
       </ConsoleGrid>

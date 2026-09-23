@@ -4,9 +4,13 @@ import { requireAuth } from '../../middleware/index.js';
 
 const settingsRouter = express.Router();
 
+function isPrivileged(user) {
+  return user?.role === 'broadcaster' || user?.role === 'admin';
+}
+
 settingsRouter.get('/settings', requireAuth, (req, res) => {
   const settings = db.getSettings();
-  if (req.user.role !== 'broadcaster') settings.streamKey = '';
+  if (!isPrivileged(req.user)) settings.streamKey = '';
   res.json(settings);
 });
 
@@ -27,8 +31,8 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'twitchServer must be a string' });
   if (streamKey !== undefined && typeof streamKey !== 'string')
     return res.status(400).json({ error: 'streamKey must be a string' });
-  if (req.user.role !== 'broadcaster' && streamKey !== undefined)
-    return res.status(403).json({ error: 'Only the broadcaster can change the stream key.' });
+  if (!isPrivileged(req.user) && streamKey !== undefined)
+    return res.status(403).json({ error: 'Only the broadcaster or an admin can change the stream key.' });
   if (videoBitrateKbps !== undefined && (!Number.isInteger(videoBitrateKbps) || videoBitrateKbps < 500 || videoBitrateKbps > 10000))
     return res.status(400).json({ error: 'videoBitrateKbps must be an integer between 500 and 10000' });
   if (audioBitrateKbps !== undefined && (!Number.isInteger(audioBitrateKbps) || audioBitrateKbps < 32 || audioBitrateKbps > 320))
@@ -41,7 +45,7 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'restartDelaySeconds must be an integer between 0 and 3600' });
   const saved = db.saveSettings({
     twitchServer,
-    streamKey: req.user.role === 'broadcaster' ? streamKey : undefined,
+    streamKey: isPrivileged(req.user) ? streamKey : undefined,
     playlistSource,
     altStreamer,
     loopPlaylist,
@@ -51,7 +55,7 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     restartIntervalSeconds,
     restartDelaySeconds,
   });
-  if (req.user.role !== 'broadcaster') saved.streamKey = '';
+  if (!isPrivileged(req.user)) saved.streamKey = '';
   res.json(saved);
 });
 

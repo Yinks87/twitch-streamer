@@ -161,7 +161,7 @@ const StreamHeroPanel = ({
             disabled={
               busy ||
               readyPlaylist.length === 0 ||
-              (userRole === 'broadcaster' && !settings.streamKey)
+              (['broadcaster', 'admin'].includes(userRole) && !settings.streamKey)
             }
           >
             Stream starten

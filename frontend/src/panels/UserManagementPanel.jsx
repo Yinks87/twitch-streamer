@@ -3,7 +3,7 @@ import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import { api } from '../api';
 import Button from '../components/Button';
-import { Input } from '../components/FormControls';
+import { Input, Select } from '../components/FormControls';
 import {
   VideoList,
   VideoListItem,
@@ -11,9 +11,15 @@ import {
 } from '../components/VideoList';
 import { Chip, Avatar } from '@mui/material';
 
+const ROLE_LABELS = {
+  manager: 'Manager',
+  admin: 'Admin',
+};
+
 export default function UserManagementPanel({ setMessage }) {
   const [managers, setManagers] = useState([]);
   const [login, setLogin] = useState('');
+  const [role, setRole] = useState('manager');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -38,12 +44,12 @@ export default function UserManagementPanel({ setMessage }) {
     if (!value) return;
     setSaving(true);
     try {
-      const data = await api.addManager(value);
+      const data = await api.addManager(value, role);
       setManagers((current) => [...current, data.manager]);
       setLogin('');
       setMessage({
         type: 'info',
-        text: `${data.manager.display_name} wurde als Manager hinzugefügt.`,
+        text: `${data.manager.display_name} wurde als ${ROLE_LABELS[data.manager.role] || data.manager.role} hinzugefügt.`,
       });
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
@@ -71,22 +77,27 @@ export default function UserManagementPanel({ setMessage }) {
     <CollapsiblePanel storageKey="user-management" title="Benutzerverwaltung">
       <Hint>
         Manager können sich anmelden und Stream-Einstellungen ändern, aber den
-        Stream-Key nicht sehen.
+        Stream-Key nicht sehen. Admins können zusätzlich den Stream-Key sehen
+        und Benutzer verwalten.
       </Hint>
       <AddForm onSubmit={handleAdd}>
         <Input
           type="text"
           value={login}
           onChange={(event) => setLogin(event.target.value)}
-          placeholder="Twitch-Login des Managers"
+          placeholder="Twitch-Login des Benutzers"
           autoComplete="off"
         />
+        <Select value={role} onChange={(event) => setRole(event.target.value)}>
+          <option value="manager">Manager</option>
+          <option value="admin">Admin</option>
+        </Select>
         <Button
           variant="primary"
           type="submit"
           disabled={saving || !login.trim()}
         >
-          {saving ? 'Prüft…' : 'Manager hinzufügen'}
+          {saving ? 'Prüft…' : 'Benutzer hinzufügen'}
         </Button>
       </AddForm>
       {loading ? (
@@ -99,7 +110,7 @@ export default function UserManagementPanel({ setMessage }) {
             <Chip
               key={manager.id}
               avatar={<Avatar src={manager.profile_image_url} alt="" />}
-              label={manager.display_name}
+              label={`${manager.display_name} (${ROLE_LABELS[manager.role] || manager.role})`}
               onDelete={() => handleRemove(manager)}
               sx={{
                 backgroundColor: 'var(--panel-raised)',

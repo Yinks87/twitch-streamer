@@ -8,8 +8,8 @@ const usersRouter = express.Router();
 const { TWITCH_CLIENT_ID } = config;
 
 function requireBroadcaster(req, res, next) {
-  if (req.user?.role !== 'broadcaster') {
-    return res.status(403).json({ error: 'Only the broadcaster can manage users.' });
+  if (!['broadcaster', 'admin'].includes(req.user?.role)) {
+    return res.status(403).json({ error: 'Only the broadcaster or an admin can manage users.' });
   }
   next();
 }
@@ -23,6 +23,10 @@ usersRouter.get('/users/managers', (req, res) => {
 usersRouter.post('/users/managers', async (req, res) => {
   const login = String(req.body?.login || '').trim().toLowerCase();
   if (!login) return res.status(400).json({ error: 'Twitch login is required' });
+  const requestedRole = String(req.body?.role || 'manager').trim().toLowerCase();
+  if (!['manager', 'admin'].includes(requestedRole)) {
+    return res.status(400).json({ error: "role must be 'manager' or 'admin'" });
+  }
 
   const existing = db.getUserByAccessToken(req.user.access_token);
   if (!existing) return res.status(401).json({ error: 'Broadcaster account not found' });
@@ -53,6 +57,7 @@ usersRouter.post('/users/managers', async (req, res) => {
       displayName: twitchUser.display_name,
       broadcasterType: twitchUser.broadcaster_type,
       profileImageUrl: twitchUser.profile_image_url,
+      role: requestedRole,
     });
     res.status(201).json({ manager });
   } catch (err) {

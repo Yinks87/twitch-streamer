@@ -226,7 +226,7 @@ export function getUserCount() {
 export function getManagers() {
   return db
     .prepare(
-      "SELECT id, twitch_user_id, login, display_name, broadcaster_type, profile_image_url, role, created_at FROM users WHERE role = 'manager' ORDER BY display_name COLLATE NOCASE",
+      "SELECT id, twitch_user_id, login, display_name, broadcaster_type, profile_image_url, role, created_at FROM users WHERE role IN ('manager', 'admin') ORDER BY display_name COLLATE NOCASE",
     )
     .all();
 }
@@ -237,15 +237,17 @@ export function addManager({
   displayName,
   broadcasterType,
   profileImageUrl,
+  role = 'manager',
 }) {
+  const safeRole = role === 'admin' ? 'admin' : 'manager';
   const result = db
     .prepare(
       `
     INSERT INTO users (twitch_user_id, login, display_name, access_token, broadcaster_type, profile_image_url, managers, role)
-    VALUES (?, ?, ?, '', ?, ?, '[]', 'manager')
+    VALUES (?, ?, ?, '', ?, ?, '[]', ?)
   `,
     )
-    .run(twitchUserId, login, displayName, broadcasterType ?? null, profileImageUrl ?? null);
+    .run(twitchUserId, login, displayName, broadcasterType ?? null, profileImageUrl ?? null, safeRole);
   return db
     .prepare(
       'SELECT id, twitch_user_id, login, display_name, broadcaster_type, profile_image_url, role, created_at FROM users WHERE id = ?',
@@ -255,8 +257,9 @@ export function addManager({
 
 export function removeManager(id) {
   return (
-    db.prepare("DELETE FROM users WHERE id = ? AND role = 'manager'").run(id)
-      .changes > 0
+    db
+      .prepare("DELETE FROM users WHERE id = ? AND role IN ('manager', 'admin')")
+      .run(id).changes > 0
   );
 }
 

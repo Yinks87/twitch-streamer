@@ -48,7 +48,7 @@ export const api = {
 
   // User management
   getManagers: () => get(`${BASE}/users/managers`),
-  addManager: (login) => post(`${BASE}/users/managers`, { login }),
+  addManager: (login, role) => post(`${BASE}/users/managers`, { login, role }),
   removeManager: (id) => del(`${BASE}/users/managers/${id}`),
 
   // Videos

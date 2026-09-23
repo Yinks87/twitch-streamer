@@ -120,7 +120,8 @@ twitchAuthRouter.get("/twitch/callback", async (req, res) => {
     const permitted = String(TWITCH_PERMITTED_USER || '').trim().toLowerCase();
     const isPermittedUser = permitted && [twitchUser.id, twitchUser.login, twitchUser.display_name]
       .some((value) => String(value || '').trim().toLowerCase() === permitted);
-    if (existingUser?.role !== 'broadcaster' && existingUser?.role !== 'manager' && !isPermittedUser) {
+    const knownRoles = ['broadcaster', 'admin', 'manager'];
+    if (!knownRoles.includes(existingUser?.role) && !isPermittedUser) {
       throw new Error('This Twitch user is not authorized to use the application.');
     }
     const role = isPermittedUser ? 'broadcaster' : (existingUser?.role || 'manager');
