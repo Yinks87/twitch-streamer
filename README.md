@@ -83,9 +83,22 @@ Das ffmpeg-Log ist zusätzlich direkt in der Oberfläche einsehbar (Panel
 ### Aktualisieren
 
 ```bash
-git pull   # oder Dateien neu hochladen
-docker compose up -d --build
+sudo ./deploy/install.sh update
 ```
+
+Der Update-Befehl führt `git pull --ff-only` aus und baut die Container neu.
+Die persistenten Ordner `data/db`, `data/logs` und `data/videos` werden nicht
+gelöscht oder aus dem Repository überschrieben. Lokale, nicht committete
+Codeänderungen können den Pull wie gewohnt blockieren.
+
+Zum vollständigen Zurücksetzen der Laufzeitdaten:
+
+```bash
+sudo ./deploy/install.sh reset
+```
+
+Nach der Sicherheitsabfrage werden die Datenbank, alle Logs und alle Videos
+gelöscht. Die leeren Ordner werden anschließend neu angelegt.
 
 ## Installation auf der VPS (Ubuntu + DuckDNS + HTTPS)
 
@@ -122,6 +135,12 @@ setzt die DuckDNS-IP (plus Cron-Update alle 5 Minuten in
 `/etc/cron.d/duckdns`), aktiviert die nginx-Site aus
 `deploy/nginx-twitch-streamer.conf` mit deiner Domain und gibt — falls `ufw`
 aktiv ist — SSH und HTTP/HTTPS frei.
+
+Die verfügbaren Befehle zeigt das Skript mit:
+
+```bash
+sudo ./deploy/install.sh -h
+```
 
 ### 3. Umgebungsvariablen setzen
 

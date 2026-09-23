@@ -1,1 +1,6 @@
 .vscode
+
+# Persistente Laufzeitdaten: niemals mit dem Repository aktualisieren.
+data/db/*
+data/logs/*
+data/videos/*

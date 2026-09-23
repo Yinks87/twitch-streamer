@@ -1,12 +1,97 @@
 #!/usr/bin/env bash
 # Einmalige VPS-Einrichtung (Ubuntu/Debian): Docker, nginx, certbot, DuckDNS-Cron.
-# Aufruf aus dem Repo-Root:  sudo ./deploy/install.sh <sub>.duckdns.org [duckdns-token]
+# Erstinstallation: sudo ./deploy/install.sh <sub>.duckdns.org [duckdns-token]
+# Update:          sudo ./deploy/install.sh update
+# Daten zurücksetzen: sudo ./deploy/install.sh reset
 set -euo pipefail
 
-DOMAIN="${1:?Aufruf: sudo ./deploy/install.sh <sub>.duckdns.org [duckdns-token]}"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+show_help() {
+  cat <<'EOF'
+Twitch Streamer - Installation und Wartung
+
+Verwendung:
+  sudo ./deploy/install.sh <sub>.duckdns.org [duckdns-token]
+      Erstinstallation: installiert Docker, nginx und certbot und richtet
+      die DuckDNS-Domain sowie den Host-Reverse-Proxy ein.
+
+  sudo ./deploy/install.sh update
+      Holt den neuesten Repository-Stand und baut die Container neu.
+      data/db, data/logs und data/videos bleiben erhalten.
+
+  sudo ./deploy/install.sh reset
+      Löscht Datenbank, Logs und Videos nach einer Sicherheitsabfrage.
+
+  sudo ./deploy/install.sh -h
+  sudo ./deploy/install.sh --help
+  sudo ./deploy/install.sh -help
+      Zeigt diese Hilfe an.
+
+Nach der Erstinstallation:
+  cp .env.example .env
+  sudo docker compose up -d --build
+  sudo certbot --nginx -d <sub>.duckdns.org
+EOF
+}
+
+case "${1:-}" in
+  -h|--help|-help)
+    show_help
+    exit 0
+    ;;
+esac
+
+if [ "${1:-}" = "update" ]; then
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "Bitte mit sudo/als root ausführen." >&2
+    exit 1
+  fi
+
+  echo "==> Repository aktualisieren"
+  git -C "${REPO_DIR}" pull --ff-only
+
+  echo "==> Container neu bauen und starten"
+  docker compose -f "${REPO_DIR}/docker-compose.yml" up -d --build
+
+  echo
+  echo "Update abgeschlossen. Die Ordner data/db, data/logs und data/videos wurden nicht verändert."
+  exit 0
+fi
+
+if [ "${1:-}" = "reset" ]; then
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "Bitte mit sudo/als root ausführen." >&2
+    exit 1
+  fi
+
+  echo "ACHTUNG: Die Datenbank, alle Logs und alle Videos werden dauerhaft gelöscht."
+  read -r -p 'Zum Bestätigen exakt RESET eingeben: ' RESET_CONFIRMATION
+  if [ "${RESET_CONFIRMATION}" != "RESET" ]; then
+    echo "Reset abgebrochen."
+    exit 1
+  fi
+
+  echo "==> Laufende Twitch-Streamer-Container stoppen"
+  docker stop twitch-streamer-backend twitch-streamer-frontend >/dev/null 2>&1 || true
+
+  echo "==> Persistente Daten löschen"
+  rm -rf -- \
+    "${REPO_DIR}/data/db" \
+    "${REPO_DIR}/data/logs" \
+    "${REPO_DIR}/data/videos"
+  mkdir -p \
+    "${REPO_DIR}/data/db" \
+    "${REPO_DIR}/data/logs" \
+    "${REPO_DIR}/data/videos"
+
+  echo "Reset abgeschlossen. Datenbank, Logs und Videos sind leer."
+  exit 0
+fi
+
+DOMAIN="${1:?Aufruf: sudo ./deploy/install.sh <sub>.duckdns.org [duckdns-token], sudo ./deploy/install.sh update oder sudo ./deploy/install.sh reset}"
 DUCKDNS_TOKEN="${2:-}"
 SUBDOMAIN="${DOMAIN%%.duckdns.org}"
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Bitte mit sudo/als root ausführen." >&2
