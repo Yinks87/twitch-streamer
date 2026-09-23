@@ -347,7 +347,7 @@ export async function startStream({
 
   const baseArgs = [
     '-loglevel',
-    'info',
+    'warning',
     // Regenerate broken/missing timestamps from source files before they hit our own filters.
     '-fflags',
     '+genpts',
