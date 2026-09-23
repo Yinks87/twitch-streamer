@@ -1,0 +1,60 @@
+:root {
+  --bg: #15171b;
+  --panel: #1b1e23;
+  --panel-raised: #202329;
+  --border: #2b2f36;
+  --text: #e9e7e1;
+  --text-dim: #8d9198;
+  --live: #e5484d;
+  --error-light: #f28b82;
+  --error-main: #e5484d;
+  --ready: #4fae83;
+  --idle: #5a5f68;
+  --signal: #d9a441;
+  --twitch: #9146ff;
+  --font-display: 'Space Grotesk', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-display);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(140, 140, 140, 0.12);
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 120, 120, 0.55);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(120, 120, 120, 0.75);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.material-symbols-outlined.muted {
+  color: var(--text-dim);
+}
+
+.material-symbols-outlined.small {
+  font-size: 1rem;
+}

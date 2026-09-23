@@ -1,0 +1,37 @@
+services:
+  backend:
+    build: ./backend
+    container_name: twitch-streamer-backend
+    restart: unless-stopped
+    environment:
+      - PORT=4000
+      - VIDEOS_DIR=/app/videos
+      - DB_PATH=/app/db/data.sqlite
+      - LOGS_DIR=/app/logs
+      - FFMPEG_PATH=ffmpeg
+      - YTDLP_PATH=yt-dlp
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
+      - TWITCH_PERMITTED_USER=${TWITCH_PERMITTED_USER}
+      # Twitch akzeptiert nur https://-Redirect-URIs (Ausnahme: http://localhost im Dev),
+      # daher Pflichtwert aus .env statt eines http-Fallbacks.
+      - TWITCH_REDIRECT_URI=${TWITCH_REDIRECT_URI:?TWITCH_REDIRECT_URI fehlt in .env, z.B. https://meinstream.duckdns.org/api/v1/auth/twitch/callback}
+      - SESSION_SECRET=${SESSION_SECRET}
+      # FRONTEND_URL is empty in production (same origin via nginx proxy)
+    volumes:
+      - ./data/videos:/app/videos
+      - ./data/db:/app/db
+      - ./data/logs:/app/logs
+    expose:
+      - "4000"
+
+  frontend:
+    build: ./frontend
+    container_name: twitch-streamer-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # Nur localhost: Der Host-nginx (deploy/nginx-twitch-streamer.conf) terminiert
+    # TLS für die DuckDNS-Domain und proxied hierher.
+    ports:
+      - "127.0.0.1:8080:80"
