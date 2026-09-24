@@ -11,6 +11,7 @@ import {
   Eyebrow,
   ConsoleGrid,
 } from '../components/ConsoleLayout';
+import LogsPanel from '../panels/LogsPanel';
 
 const INGEST_PRESETS = [
   { label: 'Automatisch (live.twitch.tv)', value: 'rtmp://live.twitch.tv/app' },
@@ -85,7 +86,8 @@ export default function Settings() {
         restartIntervalSeconds: Number(settings.restartIntervalSeconds),
         restartDelaySeconds: Number(settings.restartDelaySeconds),
       };
-      if (user.role === 'broadcaster' || user.role === 'admin') payload.streamKey = settings.streamKey;
+      if (user.role === 'broadcaster' || user.role === 'admin')
+        payload.streamKey = settings.streamKey;
       const saved = await api.saveSettings(payload);
       setSettings(saved);
       setMessage({ type: 'info', text: 'Einstellungen gespeichert.' });
@@ -145,6 +147,9 @@ export default function Settings() {
           <UserManagementPanelFile setMessage={setMessage} />
         )}
       </ConsoleGrid>
+
+      {/* ── Stream logs (admin only) ─────────────────────────────────────────── */}
+      <LogsPanel userRole={user.role} setMessage={setMessage} />
     </Console>
   );
 }
