@@ -83,6 +83,10 @@ if [ "${1:-}" = "update-service" ]; then
     exit 1
   fi
   setup_update_service
+  if docker ps --format '{{.Names}}' | grep -qx 'twitch-streamer-backend'; then
+    echo "Backend-Container wird mit der Update-Service-Konfiguration neu erstellt."
+    docker compose -f "${REPO_DIR}/docker-compose.yml" up -d --no-deps --force-recreate backend
+  fi
   echo "Admin-Update-Service eingerichtet."
   exit 0
 fi
