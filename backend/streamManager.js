@@ -39,6 +39,8 @@ let sessionLogLines = [];
 let lastExit = null;
 // Stored while streaming so the exit handler can restart for looping.
 let activeStreamConfig = null;
+let activeLoopPlaylistPath = null;
+let pendingLoopPlaylistState = null;
 let resumeState = null;
 // RTMP timestamp base of the current session (seconds already streamed before it).
 let outputTsOffsetSecs = 0;
@@ -193,6 +195,80 @@ function buildPlaylistContent() {
   return { entries };
 }
 
+function removeStalePlaylistFiles() {
+  if (!fs.existsSync(VIDEOS_DIR)) return;
+  for (const filename of fs.readdirSync(VIDEOS_DIR)) {
+    if (!/^twitch-playlist-\d+(?:-loop)?\.txt(?:\.\d+\.\d+\.tmp)?$/.test(filename)) continue;
+    try {
+      fs.unlinkSync(path.join(VIDEOS_DIR, filename));
+    } catch {}
+  }
+}
+
+function writePlaylistFile(playlistPath, content) {
+  const temporaryPath = `${playlistPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temporaryPath, content, 'utf8');
+  fs.renameSync(temporaryPath, playlistPath);
+}
+
+function setLoopPlaylistState(entries, durations, resumeOffset = 0) {
+  let cumulativeSeconds = 0;
+  transitionTimes = [];
+  for (let index = 0; index < entries.length; index++) {
+    const duration = durations[index];
+    if (duration == null) break;
+    if (index < entries.length - 1) {
+      transitionTimes.push({
+        atSecs: cumulativeSeconds + duration,
+        filename: entries[index + 1].filename,
+      });
+    }
+    cumulativeSeconds += duration;
+  }
+  totalDuration = cumulativeSeconds;
+  loopFirstFile = entries[0].filename;
+  nextTransitionIdx = 0;
+  while (
+    nextTransitionIdx < transitionTimes.length &&
+    transitionTimes[nextTransitionIdx].atSecs <= resumeOffset
+  ) {
+    nextTransitionIdx++;
+  }
+}
+
+export async function refreshActivePlaylist() {
+  const playlistPath = activeLoopPlaylistPath;
+  if (!ffmpegProcess || !playlistPath) return false;
+
+  const { entries } = buildPlaylistContent();
+  const durations = await Promise.all(
+    entries.map(async ({ filename }) => {
+      const probe = await probeVideo(path.resolve(VIDEOS_DIR, filename));
+      return probe?.duration ?? null;
+    }),
+  );
+
+  if (!ffmpegProcess || activeLoopPlaylistPath !== playlistPath) return false;
+
+  const escapeName = (name) => name.replace(/'/g, "'\\''");
+  const entryLines = entries
+    .map(({ filename }, index) => {
+      const duration = durations[index];
+      let line = `file '${escapeName(filename)}'`;
+      if (duration != null) line += `\nduration ${duration}`;
+      return line;
+    })
+    .join('\n');
+  const playlistFilename = path.basename(playlistPath);
+  writePlaylistFile(
+    playlistPath,
+    `ffconcat version 1.0\n${entryLines}\nfile '${escapeName(playlistFilename)}'\n`,
+  );
+  pendingLoopPlaylistState = { entries, durations };
+  pushLog(`Playlist updated; ${entries.length} item(s) will play in the next loop.`);
+  return true;
+}
+
 function isRunning() {
   return ffmpegProcess !== null;
 }
@@ -231,6 +307,7 @@ export async function startStream({
   clearReconnectTimer();
   clearScheduledRestartTimer();
   scheduledRestartRequested = false;
+  removeStalePlaylistFiles();
 
   const { entries: playlistEntries } = buildPlaylistContent();
   const resumeIndex = resumeFrom
@@ -331,10 +408,9 @@ export async function startStream({
     // second playlist without the inpoint; the resume playlist chains into it.
     const loopFilename = `twitch-playlist-${stamp}-loop.txt`;
     const loopPath = path.join(playlistDir, loopFilename);
-    fs.writeFileSync(
+    writePlaylistFile(
       loopPath,
       `ffconcat version 1.0\n${entryLines(0)}\nfile '${escapeName(loopFilename)}'\n`,
-      'utf8',
     );
     playlistPaths.push(loopPath);
     content = `ffconcat version 1.0\n${entryLines(resumeOffset)}\nfile '${escapeName(loopFilename)}'\n`;
@@ -343,7 +419,13 @@ export async function startStream({
   } else {
     content = `ffconcat version 1.0\n${entryLines(resumeOffset)}\n`;
   }
-  fs.writeFileSync(playlistPath, content, 'utf8');
+  writePlaylistFile(playlistPath, content);
+  activeLoopPlaylistPath = loop
+    ? resumeOffset > 0
+      ? playlistPaths[1]
+      : playlistPath
+    : null;
+  pendingLoopPlaylistState = null;
 
   const baseArgs = [
     '-loglevel',
@@ -497,26 +579,10 @@ export async function startStream({
   currentVideoBaseOffset = resumeOffset;
   lastOutputTimeSecs = 0;
   {
-    let cumSecs = 0;
-    for (let i = 0; i < entries.length; i++) {
-      const dur = durations[i];
-      if (dur == null) break;
-      if (i < entries.length - 1)
-        transitionTimes.push({
-          atSecs: cumSecs + dur,
-          filename: entries[i + 1].filename,
-        });
-      cumSecs += dur;
-    }
-    totalDuration = cumSecs;
+    setLoopPlaylistState(entries, durations, resumeOffset);
     // The resumed portion counts as already-elapsed cycle time, so the shortened first
     // cycle and all full later cycles share one set of transition times.
     cycleOffset = -resumeOffset;
-    while (
-      nextTransitionIdx < transitionTimes.length &&
-      transitionTimes[nextTransitionIdx].atSecs <= resumeOffset
-    )
-      nextTransitionIdx++;
   }
 
   streamEvents.emit('videoChanged', entries[0].filename);
@@ -536,6 +602,13 @@ export async function startStream({
       if (loop && totalDuration > 0) {
         while (outTimeSecs >= cycleOffset + totalDuration) {
           cycleOffset += totalDuration;
+          if (pendingLoopPlaylistState) {
+            setLoopPlaylistState(
+              pendingLoopPlaylistState.entries,
+              pendingLoopPlaylistState.durations,
+            );
+            pendingLoopPlaylistState = null;
+          }
           nextTransitionIdx = 0;
           if (activeStreamConfig) {
             currentVideoBaseOffset = 0;
@@ -597,6 +670,8 @@ export async function startStream({
     }
     clearVideoChangeTimers();
     resetTransitionState();
+    activeLoopPlaylistPath = null;
+    pendingLoopPlaylistState = null;
     for (const p of playlistPaths) {
       try {
         fs.unlinkSync(p);
@@ -640,6 +715,8 @@ export async function startStream({
   ffmpegProcess.on('error', (err) => {
     clearScheduledRestartTimer();
     pushLog(`Failed to start ffmpeg: ${err.message}`);
+    activeLoopPlaylistPath = null;
+    pendingLoopPlaylistState = null;
     ffmpegProcess = null;
     startedAt = null;
   });

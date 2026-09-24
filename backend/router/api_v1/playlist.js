@@ -1,8 +1,18 @@
 import express from 'express';
 import * as db from '../../db.js';
+import { refreshActivePlaylist } from '../../streamManager.js';
 import { readTranscript, transcriptNeedsCategory } from '../../utils/transcript.js';
 
 const playlistRouter = express.Router();
+
+async function refreshRunningPlaylist() {
+  try {
+    return await refreshActivePlaylist();
+  } catch (error) {
+    console.error('Unable to refresh active playlist:', error.message);
+    return false;
+  }
+}
 
 playlistRouter.get('/playlist', (req, res) => {
   const playlist = db.getPlaylist().map((entry) => ({
@@ -12,7 +22,7 @@ playlistRouter.get('/playlist', (req, res) => {
   res.json({ playlist });
 });
 
-playlistRouter.post('/playlist', (req, res) => {
+playlistRouter.post('/playlist', async (req, res) => {
   const filename = String(req.body?.filename || '').trim();
   if (!filename) return res.status(400).json({ error: 'filename is required' });
 
@@ -30,17 +40,17 @@ playlistRouter.post('/playlist', (req, res) => {
     vodId: transcript.vodId || null,
     enabled: !transcriptNeedsCategory(transcript),
   });
-  res.status(201).json({ entry });
+  res.status(201).json({ entry, playlistRefreshed: await refreshRunningPlaylist() });
 });
 
-playlistRouter.delete('/playlist/:id', (req, res) => {
+playlistRouter.delete('/playlist/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
   db.removePlaylistEntry(id);
-  res.json({ ok: true });
+  res.json({ ok: true, playlistRefreshed: await refreshRunningPlaylist() });
 });
 
-playlistRouter.put('/playlist/reorder', (req, res) => {
+playlistRouter.put('/playlist/reorder', async (req, res) => {
   const { ids } = req.body || {};
   if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids array required' });
   const numericIds = ids.map(Number);
@@ -51,10 +61,10 @@ playlistRouter.put('/playlist/reorder', (req, res) => {
     ...entry,
     needsCategory: transcriptNeedsCategory(readTranscript(entry.filename)),
   }));
-  res.json({ ok: true, playlist });
+  res.json({ ok: true, playlist, playlistRefreshed: await refreshRunningPlaylist() });
 });
 
-playlistRouter.patch('/playlist/:id', (req, res) => {
+playlistRouter.patch('/playlist/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
   const { enabled } = req.body || {};
@@ -69,7 +79,7 @@ playlistRouter.patch('/playlist/:id', (req, res) => {
     }
     db.updatePlaylistEntry(id, { enabled: enabled ? 1 : 0 });
   }
-  res.json({ ok: true });
+  res.json({ ok: true, playlistRefreshed: await refreshRunningPlaylist() });
 });
 
 export default playlistRouter;

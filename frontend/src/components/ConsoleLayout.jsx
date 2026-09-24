@@ -11,7 +11,8 @@ export const ConsoleHeader = styled.header`
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, var(--accent), var(--signal), transparent) 1;
   padding-bottom: 20px;
   margin-bottom: 24px;
 

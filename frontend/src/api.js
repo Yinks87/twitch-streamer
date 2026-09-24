@@ -45,6 +45,8 @@ export const api = {
   // Settings
   getSettings: () => get(`${BASE}/settings`),
   saveSettings: (payload) => post(`${BASE}/settings`, payload),
+  getAppUpdateStatus: () => get(`${BASE}/app/update`),
+  startAppUpdate: () => post(`${BASE}/app/update`, {}),
 
   // User management
   getManagers: () => get(`${BASE}/users/managers`),

@@ -91,6 +91,19 @@ Die persistenten Ordner `data/db`, `data/logs` und `data/videos` werden nicht
 gelöscht oder aus dem Repository überschrieben. Lokale, nicht committete
 Codeänderungen können den Pull wie gewohnt blockieren.
 
+Admins können denselben Update-Vorgang auch in der Oberfläche unter
+`Einstellungen` starten. Dort ist der Fortschritt als Log sichtbar und kann
+heruntergeladen werden. Bei einer bestehenden Installation muss der lokale
+Update-Dienst einmalig nach dem Deployment eingerichtet werden:
+
+```bash
+sudo ./deploy/install.sh update-service
+```
+
+Der Dienst lauscht ausschließlich auf `127.0.0.1`; nur das authentifizierte
+Backend kann ihn über den Docker-Host-Gateway aufrufen. Bei einer Neuinstallation
+wird er automatisch eingerichtet.
+
 Zum vollständigen Zurücksetzen der Laufzeitdaten:
 
 ```bash

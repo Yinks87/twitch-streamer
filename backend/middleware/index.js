@@ -6,9 +6,21 @@ export function getSessionToken(req) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-export function requireAuth(req, res, next) {
+function authenticate(req, res, next, requiredRoles) {
   const user = db.getUserBySession(getSessionToken(req));
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  if (requiredRoles.length && !requiredRoles.includes(user.role)) {
+    return res.status(403).json({ error: 'Not authorized' });
+  }
   req.user = user;
   next();
+}
+
+export function requireAuth(...args) {
+  if (args.length === 3 && typeof args[2] === 'function') {
+    return authenticate(args[0], args[1], args[2], []);
+  }
+
+  const requiredRoles = args.flat();
+  return (req, res, next) => authenticate(req, res, next, requiredRoles);
 }
