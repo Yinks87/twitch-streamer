@@ -56,6 +56,22 @@ streamRouter.get('/stream/status', (req, res) => {
   res.json(streamManager.getStatus());
 });
 
+streamRouter.get('/stream/logs', requireAuth('admin'), (req, res) => {
+  res.json({ logs: streamManager.listLogFiles() });
+});
+
+streamRouter.get('/stream/logs/:filename/download', requireAuth('admin'), (req, res) => {
+  const filePath = streamManager.getLogFilePath(req.params.filename);
+  if (!filePath) return res.status(404).json({ error: 'Log file not found' });
+  res.download(filePath, req.params.filename);
+});
+
+streamRouter.get('/stream/logs/:filename', requireAuth('admin'), (req, res) => {
+  const log = streamManager.readLogFile(req.params.filename);
+  if (!log) return res.status(404).json({ error: 'Log file not found' });
+  res.json(log);
+});
+
 streamRouter.post('/stream/start', requireAuth, async (req, res) => {
   try {
     await refreshBroadcasterData();

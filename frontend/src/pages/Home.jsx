@@ -6,6 +6,7 @@ import StreamHeroPanel from '../panels/StreamHeroPanel';
 import DownloadsPanelFile from '../panels/DownloadsPanel';
 import MediaLibraryPanel from '../panels/MediaLibraryPanel';
 import PlaylistPanel from '../panels/PlaylistPanel';
+import LogsPanel from '../panels/LogsPanel';
 import UploadDialog from '../components/UploadDialog';
 import MetadataEditor from '../components/MetadataEditor';
 import Button from '../components/Button';
@@ -485,6 +486,9 @@ function PlayerPageContent() {
         StopGuardButton={StopGuardButton}
         statusLabels={VOD_STATUS_LABEL}
       />
+
+      {/* ── Stream logs (admin only) ─────────────────────────────────────────── */}
+      <LogsPanel userRole={user.role} setMessage={setMessage} />
     </Console>
   );
 }

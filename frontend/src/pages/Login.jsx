@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../api';
+import { api } from '../api.js';
 import Button from '../components/Button';
 import Banner from '../components/Banner';
 import { Eyebrow } from '../components/ConsoleLayout';

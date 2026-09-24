@@ -27,6 +27,7 @@ const VIDEO_EXTENSIONS = new Set([
 ]);
 
 const MAX_LOG_LINES = 200;
+const MAX_LOG_FILE_BYTES = 1_000_000;
 
 // Emits 'videoChanged' with the filename whenever ffmpeg opens a new video file.
 export const streamEvents = new EventEmitter();
@@ -153,6 +154,56 @@ function writeSessionLogFile(code, signal) {
   } finally {
     sessionLogLines = [];
   }
+}
+
+function getLogFileInfo(filename) {
+  if (typeof filename !== 'string' || path.basename(filename) !== filename) {
+    return null;
+  }
+  if (!/\.(?:log|txt)$/i.test(filename)) return null;
+
+  const filePath = path.join(LOGS_DIR, filename);
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) return null;
+    return { filename, filePath, size: stats.size, modifiedAt: stats.mtime.toISOString() };
+  } catch {
+    return null;
+  }
+}
+
+export function getLogFilePath(filename) {
+  return getLogFileInfo(filename)?.filePath ?? null;
+}
+
+export function listLogFiles() {
+  if (!fs.existsSync(LOGS_DIR)) return [];
+  return fs
+    .readdirSync(LOGS_DIR)
+    .map(getLogFileInfo)
+    .filter(Boolean)
+    .sort((first, second) => second.modifiedAt.localeCompare(first.modifiedAt))
+    .slice(0, 100)
+    .map(({ filename, size, modifiedAt }) => ({ filename, size, modifiedAt }));
+}
+
+export function readLogFile(filename) {
+  const file = getLogFileInfo(filename);
+  if (!file) return null;
+
+  const bytesToRead = Math.min(file.size, MAX_LOG_FILE_BYTES);
+  const buffer = Buffer.alloc(bytesToRead);
+  const descriptor = fs.openSync(file.filePath, 'r');
+  try {
+    fs.readSync(descriptor, buffer, 0, bytesToRead, file.size - bytesToRead);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+
+  return {
+    filename: file.filename,
+    content: `${file.size > bytesToRead ? '[Earlier log content omitted]\n' : ''}${buffer.toString('utf8')}`,
+  };
 }
 
 export function listVideoFiles() {

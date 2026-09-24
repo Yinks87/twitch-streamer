@@ -1,5 +1,5 @@
 :root {
-  --bg: #161817;
+  --bg: #15171b;
   --panel: #1b1e23;
   --panel-raised: #202329;
   --border: #2b2f36;
@@ -11,8 +11,6 @@
   --ready: #4fae83;
   --idle: #5a5f68;
   --signal: #d9a441;
-  --accent: #53b89b;
-  --accent-cool: #4baac0;
   --twitch: #9146ff;
   --font-display: 'Space Grotesk', 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
@@ -25,10 +23,6 @@
 body {
   margin: 0;
   background: var(--bg);
-  background-image:
-    linear-gradient(rgba(83, 184, 155, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(217, 164, 65, 0.03) 1px, transparent 1px);
-  background-size: 28px 28px;
   color: var(--text);
   font-family: var(--font-display);
 }
@@ -43,14 +37,14 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: rgba(83, 184, 155, 0.55);
+  background-color: rgba(120, 120, 120, 0.55);
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(217, 164, 65, 0.75);
+  background-color: rgba(120, 120, 120, 0.75);
 }
 
 *::-webkit-scrollbar-corner {

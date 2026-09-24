@@ -7,38 +7,6 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-setup_update_service() {
-  local update_token
-
-  touch "${REPO_DIR}/.env"
-  if ! grep -q '^UPDATE_SERVICE_TOKEN=.\+' "${REPO_DIR}/.env"; then
-    update_token="$(openssl rand -hex 32)"
-    printf '\nUPDATE_SERVICE_TOKEN=%s\n' "$update_token" >> "${REPO_DIR}/.env"
-    chmod 600 "${REPO_DIR}/.env"
-  fi
-
-  cat > /etc/systemd/system/twitch-streamer-update.service <<EOF
-[Unit]
-Description=Twitch Streamer update service
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=${REPO_DIR}
-EnvironmentFile=${REPO_DIR}/.env
-Environment=UPDATE_SERVICE_REPO_DIR=${REPO_DIR}
-ExecStart=/usr/bin/python3 ${REPO_DIR}/deploy/update-service.py
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  systemctl daemon-reload
-  systemctl enable --now twitch-streamer-update.service
-}
-
 show_help() {
   cat <<'EOF'
 Twitch Streamer - Installation und Wartung
@@ -51,9 +19,6 @@ Verwendung:
   sudo ./deploy/install.sh update
       Holt den neuesten Repository-Stand und baut die Container neu.
       data/db, data/logs und data/videos bleiben erhalten.
-
-    sudo ./deploy/install.sh update-service
-      Richtet den lokalen Dienst fuer Updates aus der Admin-Oberflaeche ein.
 
   sudo ./deploy/install.sh reset
       Löscht Datenbank, Logs und Videos nach einer Sicherheitsabfrage.
@@ -76,20 +41,6 @@ case "${1:-}" in
     exit 0
     ;;
 esac
-
-if [ "${1:-}" = "update-service" ]; then
-  if [ "$(id -u)" -ne 0 ]; then
-    echo "Bitte mit sudo/als root ausführen." >&2
-    exit 1
-  fi
-  setup_update_service
-  if docker ps --format '{{.Names}}' | grep -qx 'twitch-streamer-backend'; then
-    echo "Backend-Container wird mit der Update-Service-Konfiguration neu erstellt."
-    docker compose -f "${REPO_DIR}/docker-compose.yml" up -d --no-deps --force-recreate backend
-  fi
-  echo "Admin-Update-Service eingerichtet."
-  exit 0
-fi
 
 if [ "${1:-}" = "update" ]; then
   if [ "$(id -u)" -ne 0 ]; then
@@ -149,7 +100,7 @@ fi
 
 echo "==> Pakete installieren (nginx, certbot, curl)"
 apt-get update
-apt-get install -y ca-certificates curl nginx certbot openssl python3-certbot-nginx
+apt-get install -y ca-certificates curl nginx certbot python3-certbot-nginx
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "==> Docker installieren"
@@ -183,9 +134,6 @@ if command -v ufw >/dev/null 2>&1; then
   ufw allow OpenSSH >/dev/null || true
   ufw allow 'Nginx Full' >/dev/null || true
 fi
-
-echo "==> Admin-Update-Service einrichten"
-setup_update_service
 
 echo
 echo "Fertig. Nächste Schritte (siehe README):"

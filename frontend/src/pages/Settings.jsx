@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import DestinationPanel from '../panels/DestinationPanel';
 import UserManagementPanelFile from '../panels/UserManagementPanel';
-import UpdatePanel from '../panels/UpdatePanel';
 import Button from '../components/Button';
 import Banner from '../components/Banner';
 import {
@@ -145,8 +144,6 @@ export default function Settings() {
         {(user.role === 'broadcaster' || user.role === 'admin') && (
           <UserManagementPanelFile setMessage={setMessage} />
         )}
-
-        {user.role === 'admin' && <UpdatePanel setMessage={setMessage} />}
       </ConsoleGrid>
     </Console>
   );

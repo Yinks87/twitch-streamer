@@ -17,15 +17,11 @@ services:
       # daher Pflichtwert aus .env statt eines http-Fallbacks.
       - TWITCH_REDIRECT_URI=${TWITCH_REDIRECT_URI:?TWITCH_REDIRECT_URI fehlt in .env, z.B. https://meinstream.duckdns.org/api/v1/auth/twitch/callback}
       - SESSION_SECRET=${SESSION_SECRET}
-      - UPDATE_SERVICE_URL=http://host.docker.internal:4010
-      - UPDATE_SERVICE_TOKEN=${UPDATE_SERVICE_TOKEN:-}
       # FRONTEND_URL is empty in production (same origin via nginx proxy)
     volumes:
       - ./data/videos:/app/videos
       - ./data/db:/app/db
       - ./data/logs:/app/logs
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     expose:
       - "4000"
 

@@ -45,8 +45,6 @@ export const api = {
   // Settings
   getSettings: () => get(`${BASE}/settings`),
   saveSettings: (payload) => post(`${BASE}/settings`, payload),
-  getAppUpdateStatus: () => get(`${BASE}/app/update`),
-  startAppUpdate: () => post(`${BASE}/app/update`, {}),
 
   // User management
   getManagers: () => get(`${BASE}/users/managers`),
@@ -90,5 +88,10 @@ export const api = {
   getStatus: () => get(`${BASE}/stream/status`),
   startStream: () => post(`${BASE}/stream/start`, {}),
   stopStream: () => post(`${BASE}/stream/stop`, {}),
+
+  // Stream logs (admin only)
+  getLogFiles: () => get(`${BASE}/stream/logs`),
+  getLogFile: (filename) => get(`${BASE}/stream/logs/${encodeURIComponent(filename)}`),
+  getLogFileDownloadUrl: (filename) => `${BASE}/stream/logs/${encodeURIComponent(filename)}/download`,
 };
 

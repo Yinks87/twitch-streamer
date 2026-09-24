@@ -1,5 +1,4 @@
 import express from 'express';
-import config from '../../config.js';
 import * as db from '../../db.js';
 import { requireAuth } from '../../middleware/index.js';
 
@@ -7,22 +6,6 @@ const settingsRouter = express.Router();
 
 function isPrivileged(user) {
   return user?.role === 'broadcaster' || user?.role === 'admin';
-}
-
-async function callUpdateService(path, method) {
-  if (!config.UPDATE_SERVICE_URL || !config.UPDATE_SERVICE_TOKEN) {
-    throw new Error('The update service is not configured on this server.');
-  }
-
-  const response = await fetch(new URL(path, config.UPDATE_SERVICE_URL), {
-    method,
-    headers: { 'X-Update-Service-Token': config.UPDATE_SERVICE_TOKEN },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Update service returned ${response.status}.`);
-  }
-  return data;
 }
 
 settingsRouter.get('/settings', requireAuth, (req, res) => {
@@ -121,20 +104,10 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
   res.json(saved);
 });
 
-settingsRouter.get('/app/update', requireAuth('admin'), async (req, res) => {
-  try {
-    res.json(await callUpdateService('/status', 'GET'));
-  } catch (error) {
-    res.status(503).json({ error: error.message });
-  }
-});
-
-settingsRouter.post('/app/update', requireAuth('admin'), async (req, res) => {
-  try {
-    res.status(202).json(await callUpdateService('/update', 'POST'));
-  } catch (error) {
-    res.status(503).json({ error: error.message });
-  }
-});
+settingsRouter.get(
+  '/app/update',
+  requireAuth(['broadcaster', 'admin']),
+  (req, res) => {},
+);
 
 export default settingsRouter;

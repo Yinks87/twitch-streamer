@@ -19,8 +19,6 @@ dotenvConfig();
   // Leave empty in production (same origin); set to e.g. http://localhost:5173 for Vite dev.
  * @prop {string} FRONTEND_URL - The URL of the frontend application.
  * @prop {string} SESSION_SECRET - The secret key for session management.
- * @prop {string} UPDATE_SERVICE_URL - The loopback host update service URL.
- * @prop {string} UPDATE_SERVICE_TOKEN - The shared token for the host update service.
  */
 
 /**
@@ -29,8 +27,6 @@ dotenvConfig();
 
 const config = {
   ...process.env,
-  UPDATE_SERVICE_URL: process.env.UPDATE_SERVICE_URL || '',
-  UPDATE_SERVICE_TOKEN: process.env.UPDATE_SERVICE_TOKEN || '',
 };
 
 export default config;
