@@ -243,7 +243,15 @@ function TimestampCard({ timestamp, index, storageKey, onChange, onRemove }) {
             flexShrink: 0,
           }}
         >
-          {expanded ? '−' : '+'}
+          <span
+            style={{
+              transition: 'transform 0.1s ease-in-out',
+              transform: expanded ? 'rotate(90deg)' : 'rotate(270deg)',
+            }}
+            class="material-symbols-outlined small"
+          >
+            arrow_forward_ios
+          </span>
         </span>
         <span style={{ fontFamily: 'monospace', flexShrink: 0 }}>
           {timestamp.time || '00:00:00'}
@@ -287,6 +295,8 @@ function TimestampCard({ timestamp, index, storageKey, onChange, onRemove }) {
               onChange={(e) => onChange({ title: e.target.value })}
               placeholder="Titel"
               style={{ flex: 1 }}
+              maxLength={140}
+              title="Titel (max. 140 Zeichen)"
             />
             {index > 0 && (
               <Button
@@ -296,7 +306,7 @@ function TimestampCard({ timestamp, index, storageKey, onChange, onRemove }) {
                 onClick={onRemove}
                 style={{ fontSize: '0.75rem', flexShrink: 0 }}
               >
-                ✕
+                <span class="material-symbols-outlined small">delete</span>
               </Button>
             )}
           </div>
@@ -307,8 +317,12 @@ function TimestampCard({ timestamp, index, storageKey, onChange, onRemove }) {
               type="text"
               inputMode="numeric"
               value={timestamp.time ?? '00:00:00'}
-              onChange={(e) => onChange({ time: maskTimeInput(e.target.value) })}
-              onBlur={(e) => onChange({ time: completeTimeInput(e.target.value) })}
+              onChange={(e) =>
+                onChange({ time: maskTimeInput(e.target.value) })
+              }
+              onBlur={(e) =>
+                onChange({ time: completeTimeInput(e.target.value) })
+              }
               style={{ width: '92px', fontFamily: 'monospace', flexShrink: 0 }}
               placeholder="hh:mm:ss"
               title="Zeit (hh:mm:ss)"

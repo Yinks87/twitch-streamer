@@ -14,6 +14,9 @@ const Button = styled.button`
   cursor: pointer;
   text-decoration: none;
   display: inline-block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   &:disabled {
     opacity: 0.45;

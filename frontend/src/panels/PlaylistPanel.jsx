@@ -88,14 +88,27 @@ export default function PlaylistPanel({
                 title={
                   entry.needsCategory
                     ? 'Kategorie fehlt – Transkript in der Mediathek vervollständigen, um zu aktivieren'
-                    : undefined
+                    : effectivelyEnabled
+                      ? 'Deaktivieren'
+                      : 'Aktivieren'
                 }
                 style={{ fontSize: '0.75rem' }}
               >
-                {effectivelyEnabled ? 'Deaktivieren' : 'Aktivieren'}
+                {effectivelyEnabled ? (
+                  <span
+                    style={{ color: 'var(--text-dim)' }}
+                    class="material-symbols-outlined small"
+                  >
+                    mode_off_on
+                  </span>
+                ) : (
+                  <span class="material-symbols-outlined small">
+                    play_circle
+                  </span>
+                )}
               </Button>
               <StopGuardButton onClick={() => onRemove(entry.id)}>
-                Entfernen
+                <span class="material-symbols-outlined small">delete</span>
               </StopGuardButton>
             </PlaylistItem>
           );
@@ -133,4 +146,3 @@ const StatusSuffix = styled.span`
   margin-left: 0.4rem;
   opacity: 0.65;
 `;
-

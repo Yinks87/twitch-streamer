@@ -30,11 +30,21 @@ const CollapsiblePanel = ({
         >
           <span>{title}</span>
           <PanelToggleIcon aria-hidden="true">
-            {collapsed ? '+' : '−'}
+            <span
+              style={{
+                transition: 'transform 0.1s ease-in-out',
+                transform: collapsed ? 'rotate(90deg)' : 'rotate(270deg)',
+              }}
+              class="material-symbols-outlined small"
+            >
+              arrow_forward_ios
+            </span>
           </PanelToggleIcon>
         </PanelToggle>
       </PanelTitle>
-      {!collapsed && <PanelContent $hero={variant === 'hero'}>{children}</PanelContent>}
+      {!collapsed && (
+        <PanelContent $hero={variant === 'hero'}>{children}</PanelContent>
+      )}
     </Panel>
   );
 };
@@ -79,7 +89,9 @@ const PanelToggleIcon = styled.span`
 
 const PanelContent = styled.div`
   margin-top: 16px;
-  ${({ $hero }) => $hero && `
+  ${({ $hero }) =>
+    $hero &&
+    `
     display: flex;
     flex-wrap: wrap;
     align-items: center;

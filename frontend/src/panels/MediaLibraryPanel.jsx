@@ -104,7 +104,17 @@ function MediaLibraryItem({
         <VideoListName style={{ minWidth: 0 }}>
           {video.transcript?.timestamps?.[0]?.title || video.name}
         </VideoListName>
-        <ToggleIcon aria-hidden="true">{expanded ? '−' : '+'}</ToggleIcon>
+        <ToggleIcon aria-hidden="true">
+          <span
+            style={{
+              transition: 'transform 0.1s ease-in-out',
+              transform: expanded ? 'rotate(90deg)' : 'rotate(270deg)',
+            }}
+            class="material-symbols-outlined small"
+          >
+            arrow_forward_ios
+          </span>
+        </ToggleIcon>
       </ItemHeader>
 
       {expanded && (
@@ -150,7 +160,7 @@ function MediaLibraryItem({
               danger
               onClick={() => onDelete(video.name)}
             >
-              Entfernen
+              <span class="material-symbols-outlined small">delete</span>
             </Button>
             <Button
               type="button"
@@ -158,7 +168,7 @@ function MediaLibraryItem({
               onClick={saveTranscript}
               disabled={saving}
             >
-              {saving ? 'Speichert…' : 'Transcript speichern'}
+              <span class="material-symbols-outlined small">save</span>
             </Button>
           </ItemActions>
         </ItemBody>
