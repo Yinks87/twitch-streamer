@@ -333,6 +333,7 @@ export function getStatus() {
     scheduledRestartAt,
     log: logBuffer.slice(-50),
     videoCount: listVideoFiles().length,
+    currentVideo: isRunning() ? currentVideoFilename || null : null,
   };
 }
 

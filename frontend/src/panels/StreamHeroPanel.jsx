@@ -87,6 +87,11 @@ const StreamHeroPanel = ({
       ? 'idle'
       : 'ready';
 
+  const currentVideoTitle = status.running
+    ? readyPlaylist.find((entry) => entry.filename === status.currentVideo)
+        ?.title || status.currentVideo
+    : null;
+
   return (
     <CollapsiblePanel
       storageKey="stream"
@@ -112,6 +117,9 @@ const StreamHeroPanel = ({
             `${readyPlaylist.length} Item(s) in der Playlist`
           )}
         </HeroDetail>
+        {currentVideoTitle && (
+          <NowPlaying>Läuft gerade: {currentVideoTitle}</NowPlaying>
+        )}
       </HeroBody>
 
       <HeroControls>
@@ -216,6 +224,13 @@ const HeroDetail = styled.p`
   color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: 0.82rem;
+`;
+
+const NowPlaying = styled.p`
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
 `;
 
 const HeroControls = styled.div`

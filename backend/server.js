@@ -102,7 +102,9 @@ streamEvents.on('videoChanged', (filename) => {
     ? meta.timestamps
     : [{ time: '00:00:00', category: '', category_id: null, title: '' }];
 
-  const user = db.getAnyUser();
+  // Channel updates must use the broadcaster's own token — using any logged-in user
+  // (e.g. a manager) fails or silently updates the wrong channel.
+  const user = db.getBroadcasterUser();
   if (!user) return;
 
   const first = timestamps[0];
@@ -117,7 +119,7 @@ streamEvents.on('videoChanged', (filename) => {
     const secs = parseTimestamp(ts.time);
     if (secs <= 0) continue;
     const t = setTimeout(() => {
-      const freshUser = db.getAnyUser();
+      const freshUser = db.getBroadcasterUser();
       if (!freshUser) return;
       applyChannelUpdate(
         freshUser.access_token,
