@@ -15,12 +15,12 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-RUN mkdir -p /app/videos /app/db
+RUN mkdir -p /app/videos /app/data/db
 
 ENV NODE_ENV=production
 ENV PORT=4000
 ENV VIDEOS_DIR=/app/videos
-ENV DB_PATH=/app/db/data.sqlite
+ENV DB_PATH=/app/data/db/data.sqlite
 ENV FFMPEG_PATH=ffmpeg
 ENV YTDLP_PATH=yt-dlp
 

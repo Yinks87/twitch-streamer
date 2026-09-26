@@ -6,7 +6,7 @@ services:
     environment:
       - PORT=4000
       - VIDEOS_DIR=/app/videos
-      - DB_PATH=/app/db/data.sqlite
+      - DB_PATH=/app/data/db/data.sqlite
       - LOGS_DIR=/app/logs
       - FFMPEG_PATH=ffmpeg
       - YTDLP_PATH=yt-dlp
@@ -20,7 +20,7 @@ services:
       # FRONTEND_URL is empty in production (same origin via nginx proxy)
     volumes:
       - ./data/videos:/app/videos
-      - ./data/db:/app/db
+      - ./data/db:/app/data/db
       - ./data/logs:/app/logs
     expose:
       - "4000"

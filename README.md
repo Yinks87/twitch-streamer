@@ -60,7 +60,7 @@ Persistente Daten liegen auf dem Host, nicht im Container:
 
 ```
 ./data/videos   → gemountet nach /app/videos im Backend-Container
-./data/db       → gemountet nach /app/db im Backend-Container (SQLite)
+./data/db       → gemountet nach /app/data/db im Backend-Container (SQLite)
 ```
 
 Diese Ordner bleiben bei `docker compose up --build` (Neubau der Images)
