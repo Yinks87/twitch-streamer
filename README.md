@@ -1,4 +1,4 @@
-# Twitch Loop Player
+# 24/7 Twitch-Player
 
 Web-Oberfläche zum Hochladen von Videos auf eine VPS und Streamen dieser Videos
 in Dauerschleife per RTMP zu Twitch, gesteuert per Knopfdruck. Kein OBS nötig —
@@ -227,21 +227,22 @@ Hinweise:
 
 ## Hinweise zum Streaming
 
-- **Copy-Modus**: kein Re-Encoding, minimale CPU-Last. Voraussetzung: alle
-  Videos im Ordner haben identisches Codec/Format/Auflösung/Framerate,
-  sonst drohen Ruckler oder Verbindungsabbrüche an den Nahtstellen.
-- **Neu-kodieren-Modus**: transkodiert alles einheitlich (H.264/AAC, Keyframe
+- **Video-Verarbeitung**: transkodiert alles einheitlich (H.264/AAC, Keyframe
   alle 2s) — funktioniert mit gemischten Quelldateien, braucht aber
-  mehrere CPU-Kerne (ca. 2–4 für 1080p30). Im Docker-Setup teilt sich der
+  mehrere CPU-Kerne (ca. 2–4 für 1080p60). Im Docker-Setup teilt sich der
   Backend-Container die CPU mit dem Host wie jeder andere Prozess auch —
   ffmpeg läuft nicht "in" nginx, sondern als Kindprozess des Node-Backends.
 - Die Videos werden alphabetisch sortiert und in Dauerschleife abgespielt
   (`-stream_loop -1`). Neue Uploads wirken erst nach einem Neustart des
-  Streams, da die Playlist beim Start neu erzeugt wird.
+  Streams, da die Playlist beim Start neu erzeugt wird.  --> ToDo: Anpassungen der Playlist sollen ohne Neustart wirksam werden
 - Traffic im Auge behalten: ein 24/7-Stream mit 6 Mbit/s sind ca. 2 TB/Monat.
-- Der Stream-Key liegt unverschlüsselt in der SQLite-Datenbank
-  (`./data/db/data.sqlite` im Docker-Setup). Da es keine Login-Funktion
-  gibt, solltest du den Zugriff auf die Oberfläche selbst absichern (z. B.
-  Basic-Auth vor nginx, oder die Ports nur über ein VPN/SSH-Tunnel
-  erreichbar machen), sonst kann jeder mit Zugriff auf die URL den
-  Stream-Key auslesen und den Stream starten/stoppen.
+- Der Stream-Key liegt in der SQlite-Datenbank, wird bei jedem Start des Streams
+  neu von Twitch abgerufen und in der Datenbank aktualisiert. Läuft der Abruf
+  auf einen Fehler kann der Stream nicht gestartet werden.
+- Anhand des Transkripts jedes Videos werden die Stream-Informationen wie
+  Kategorie und Titel zu dem eingestelltem Zeitstempel angepasst. Jedes Video
+  muss mindestens ein Vollständiges Transkript aufweisen, damit es in die Playlist
+  aufgenommen werden kann.
+- **Benutzer Management**:
+  - Admins: Haben vollen Zugriff auch auf den Streamkey und das Benutzermanagement selber
+  - Manager: Haben Zugriff zur Video Verwaltung, nicht aber auf sensible Daten wie Streamkey oder Benutzermanagement
