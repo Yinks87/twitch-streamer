@@ -1,3 +1,12 @@
+/**
+ * TODO: Implement stream timed restart event
+ * only post a notification to the chat if the restart event is scheduled.
+ * This ensures that viewer are informed about the upcoming restart.
+ * 
+ * do NOT update channel credentials to first timestamp on this event, only do it on actual stream/video start
+ */
+
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
@@ -6,6 +15,8 @@ import { EventEmitter } from 'node:events';
 import config from './config.js';
 import * as db from './db/db.js';
 import { readTranscript, transcriptNeedsCategory } from './utils/transcript.js';
+import { sendChatMessage } from './twitch/api.js';
+import { parseTemplate } from './utils/template-parser.js';
 
 const FFMPEG_PATH = config.FFMPEG_PATH;
 // Twitch allows up to 8000 kbps / 60 fps; matches OBS's default "veryfast" x264 profile.
@@ -166,7 +177,12 @@ function getLogFileInfo(filename) {
   try {
     const stats = fs.statSync(filePath);
     if (!stats.isFile()) return null;
-    return { filename, filePath, size: stats.size, modifiedAt: stats.mtime.toISOString() };
+    return {
+      filename,
+      filePath,
+      size: stats.size,
+      modifiedAt: stats.mtime.toISOString(),
+    };
   } catch {
     return null;
   }
@@ -249,7 +265,10 @@ function buildPlaylistContent() {
 function removeStalePlaylistFiles() {
   if (!fs.existsSync(VIDEOS_DIR)) return;
   for (const filename of fs.readdirSync(VIDEOS_DIR)) {
-    if (!/^twitch-playlist-\d+(?:-loop)?\.txt(?:\.\d+\.\d+\.tmp)?$/.test(filename)) continue;
+    if (
+      !/^twitch-playlist-\d+(?:-loop)?\.txt(?:\.\d+\.\d+\.tmp)?$/.test(filename)
+    )
+      continue;
     try {
       fs.unlinkSync(path.join(VIDEOS_DIR, filename));
     } catch {}
@@ -316,7 +335,9 @@ export async function refreshActivePlaylist() {
     `ffconcat version 1.0\n${entryLines}\nfile '${escapeName(playlistFilename)}'\n`,
   );
   pendingLoopPlaylistState = { entries, durations };
-  pushLog(`Playlist updated; ${entries.length} item(s) will play in the next loop.`);
+  pushLog(
+    `Playlist updated; ${entries.length} item(s) will play in the next loop.`,
+  );
   return true;
 }
 
@@ -702,7 +723,7 @@ export async function startStream({
     }
   });
 
-  ffmpegProcess.on('exit', (code, signal) => {
+  ffmpegProcess.on('exit', async (code, signal) => {
     const restartConfig = activeStreamConfig;
     const isScheduledRestart = scheduledRestartRequested;
     scheduledRestartRequested = false;
@@ -751,6 +772,21 @@ export async function startStream({
         ? `Scheduled restart; resuming in ${reconnectDelaySeconds} seconds.`
         : `RTMP connection ended; reconnecting in ${reconnectDelaySeconds} seconds.`,
     );
+
+    const newSettings = db.getSettings();
+    const user = db.getBroadcasterUser();
+
+    if (isScheduledRestart && newSettings.chatMessagesEnabled) {
+      await sendChatMessage({
+        access_token: user.access_token,
+        broadcaster_id: user.twitch_user_id,
+        sender_id: user.twitch_user_id,
+        message: parseTemplate(
+          newSettings?.chatMessages?.restartMessage || '',
+          { duration: reconnectDelaySeconds },
+        ),
+      });
+    }
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (!activeStreamConfig || isRunning()) return;
