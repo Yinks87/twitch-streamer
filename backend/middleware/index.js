@@ -9,9 +9,6 @@ export function getSessionToken(req) {
 function authenticate(req, res, next, requiredRoles) {
   const user = db.getUserBySession(getSessionToken(req));
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
-  console.log('Required roles:', requiredRoles);
-  console.log('User role:', user.role);
-  console.log('Authenticated user:', user);
   if (requiredRoles.length && !requiredRoles.includes(user.role)) {
     return res.status(403).json({ error: 'Not authorized' });
   }
