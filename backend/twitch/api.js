@@ -282,3 +282,47 @@ export async function sendChatMessage({
     }
   });
 }
+
+const STREAMER_DATA_ERROR =
+  'Fehler beim Abrufen der Streamer Daten, erneute Anmeldung des Streamers erforderlich...';
+
+export async function getBroadcasterData() {
+  const broadcaster = db.getBroadcasterUser();
+  if (!broadcaster?.access_token) throw new Error(STREAMER_DATA_ERROR);
+
+  return validateAndProceed(broadcaster.access_token, async (validToken) => {
+    try {
+      const userResponse = await twitchAPI.get(
+        `/users?id=${encodeURIComponent(broadcaster.twitch_user_id)}`,
+        {
+          headers: {
+            'Client-ID': TWITCH_CLIENT_ID,
+            Authorization: `Bearer ${validToken}`,
+          },
+        },
+      );
+      const userData = userResponse.data?.data[0];
+
+      const keyResponse = await twitchAPI.get(
+        `/streams/key?broadcaster_id=${userData.id}`,
+        {
+          headers: {
+            'Client-ID': TWITCH_CLIENT_ID,
+            Authorization: `Bearer ${validToken}`,
+          },
+        },
+      );
+      const keyData = keyResponse.data?.data[0];
+      const streamKey = keyData?.stream_key;
+
+      if (!userData) throw new Error('Twitch user lookup failed');
+      if (!streamKey) throw new Error('Twitch stream key lookup failed');
+      return { user: userData, streamKey };
+    } catch (error) {
+      console.error('Error fetching broadcaster data from Twitch API:', error);
+      throw new Error(
+        `Failed to fetch broadcaster data: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+      );
+    }
+  });
+}

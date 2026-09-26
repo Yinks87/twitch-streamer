@@ -1,8 +1,9 @@
 import express from 'express';
 import * as db from '../../db/db.js';
+import config from '../../config.js';
 import { requireAuth } from '../../middleware/index.js';
 import * as streamManager from '../../streamManager.js';
-import { validateAndProceed } from '../../twitch/api.js';
+import { getBroadcasterData, validateAndProceed } from '../../twitch/api.js';
 
 const streamRouter = express.Router();
 const STREAMER_DATA_ERROR =
@@ -12,34 +13,8 @@ async function refreshBroadcasterData() {
   const broadcaster = db.getBroadcasterUser();
   if (!broadcaster?.access_token) throw new Error(STREAMER_DATA_ERROR);
 
+  const refreshed = await getBroadcasterData();
   try {
-    const refreshed = await validateAndProceed(
-      broadcaster.access_token,
-      async (accessToken) => {
-        const headers = {
-          Authorization: `Bearer ${accessToken}`,
-          'Client-Id': process.env.TWITCH_CLIENT_ID,
-        };
-        const userResponse = await fetch(
-          `https://api.twitch.tv/helix/users?id=${encodeURIComponent(broadcaster.twitch_user_id)}`,
-          { headers },
-        );
-        const userData = await userResponse.json();
-        if (!userResponse.ok || !userData.data?.[0])
-          throw new Error('Twitch user lookup failed');
-
-        const keyResponse = await fetch(
-          `https://api.twitch.tv/helix/streams/key?broadcaster_id=${encodeURIComponent(userData.data[0].id)}`,
-          { headers },
-        );
-        const keyData = await keyResponse.json();
-        const streamKey = keyData.data?.[0]?.stream_key;
-        if (!keyResponse.ok || !streamKey)
-          throw new Error('Twitch stream key lookup failed');
-        return { user: userData.data[0], streamKey };
-      },
-    );
-
     db.db
       .prepare(
         `
