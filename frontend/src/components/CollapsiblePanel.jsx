@@ -35,7 +35,7 @@ const CollapsiblePanel = ({
                 transition: 'transform 0.1s ease-in-out',
                 transform: collapsed ? 'rotate(90deg)' : 'rotate(270deg)',
               }}
-              class="material-symbols-outlined small"
+              className="material-symbols-outlined small"
             >
               arrow_forward_ios
             </span>

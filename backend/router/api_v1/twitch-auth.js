@@ -1,7 +1,7 @@
 import express from "express";
 import crypto from "node:crypto";
 import config from "../../config.js";
-import * as db from "../../db.js";
+import * as db from "../../db/db.js";
 import { getSessionToken } from "../../middleware/index.js";
 const twitchAuthRouter = express.Router();
 
@@ -53,7 +53,7 @@ twitchAuthRouter.get("/twitch", (req, res) => {
   url.searchParams.set("response_type", "code");
   url.searchParams.set(
     "scope",
-    "channel:read:stream_key user:read:broadcast channel:manage:broadcast",
+    "channel:read:stream_key user:read:broadcast channel:manage:broadcast user:write:chat",
   );
   url.searchParams.set("state", state);
   res.redirect(url.toString());

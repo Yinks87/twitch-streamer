@@ -97,18 +97,18 @@ export default function PlaylistPanel({
                 {effectivelyEnabled ? (
                   <span
                     style={{ color: 'var(--text-dim)' }}
-                    class="material-symbols-outlined small"
+                    className="material-symbols-outlined small"
                   >
                     mode_off_on
                   </span>
                 ) : (
-                  <span class="material-symbols-outlined small">
+                  <span className="material-symbols-outlined small">
                     play_circle
                   </span>
                 )}
               </Button>
               <StopGuardButton onClick={() => onRemove(entry.id)}>
-                <span class="material-symbols-outlined small">delete</span>
+                <span className="material-symbols-outlined small">delete</span>
               </StopGuardButton>
             </PlaylistItem>
           );

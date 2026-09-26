@@ -3,95 +3,101 @@ import axios from 'axios';
 
 async function handle(res) {
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed with status ${res.status}`);
+  if (!res.ok)
+    throw new Error(data.error || `Request failed with status ${res.status}`);
   return data;
 }
 
 const apiClient = axios.create({
   baseURL: BASE,
-})
-
-const get = (url) => fetch(url, { credentials: 'include' }).then(handle);
-const post = (url, body) =>
-  fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }).then(handle);
-const del = (url) => fetch(url, { method: 'DELETE', credentials: 'include' }).then(handle);
-const patch = (url, body) =>
-  fetch(url, {
-    method: 'PATCH',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }).then(handle);
-const put = (url, body) =>
-  fetch(url, {
-    method: 'PUT',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }).then(handle);
+});
 
 export const api = {
   // Auth
-  getMe: () => get(`${BASE}/auth/me`),
-  logout: () => post(`${BASE}/auth/logout`, {}),
-  // loginUrl redirects the browser to start the OAuth flow
+  getMe: () => apiClient.get(`/auth/me`).then((res) => res.data),
+  logout: () => apiClient.post(`/auth/logout`, {}).then((res) => res.data),
   loginUrl: `${BASE}/auth/twitch`,
 
   // Settings
-  getSettings: () => get(`${BASE}/settings`),
-  saveSettings: (payload) => post(`${BASE}/settings`, payload),
+  getSettings: () => apiClient.get(`/settings`).then((res) => res.data),
+  saveSettings: (payload) =>
+    apiClient.post(`/settings`, payload).then((res) => res.data),
 
   // User management
-  getManagers: () => get(`${BASE}/users/managers`),
-  addManager: (login, role) => post(`${BASE}/users/managers`, { login, role }),
-  removeManager: (id) => del(`${BASE}/users/managers/${id}`),
+  getManagers: () => apiClient.get(`/users/managers`).then((res) => res.data),
+  addManager: (login, role) =>
+    apiClient.post(`/users/managers`, { login, role }).then((res) => res.data),
+  removeManager: (id) =>
+    apiClient.delete(`/users/managers/${id}`).then((res) => res.data),
 
   // Videos
-  getVideos: () => get(`${BASE}/videos`),
-  deleteVideo: (name) => del(`${BASE}/videos/${encodeURIComponent(name)}`),
-  updateTranscript: (name, transcript) => put(`${BASE}/videos/${encodeURIComponent(name)}/transcript`, transcript),
+  getVideos: () => apiClient.get(`/videos`).then((res) => res.data),
+  deleteVideo: (name) =>
+    apiClient
+      .delete(`/videos/${encodeURIComponent(name)}`)
+      .then((res) => res.data),
+  updateTranscript: (name, transcript) =>
+    apiClient
+      .put(`/videos/${encodeURIComponent(name)}/transcript`, transcript)
+      .then((res) => res.data),
   uploadVideos: (files, metaList) => {
     const form = new FormData();
     Array.from(files).forEach((file) => form.append('videos', file));
     if (metaList) form.append('meta', JSON.stringify(metaList));
-    return fetch(`${BASE}/upload`, { method: 'POST', credentials: 'include', body: form }).then(handle);
+    return fetch(`/upload`, {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    }).then(handle);
   },
 
   // Active downloads
-  getDownloads: () => get(`${BASE}/downloads`),
-  abortDownload: (entryId) => del(`${BASE}/downloads/${entryId}`),
+  getDownloads: () => apiClient.get(`/downloads`).then((res) => res.data),
+  abortDownload: (entryId) =>
+    apiClient.delete(`/downloads/${entryId}`).then((res) => res.data),
 
   // Twitch VODs
   getVods: (after, userLogin) => {
     const p = new URLSearchParams();
-    if (after) p.set("after", after);
-    if (userLogin) p.set("user_login", userLogin);
+    if (after) p.set('after', after);
+    if (userLogin) p.set('user_login', userLogin);
     const qs = p.toString();
-    return get(`${BASE}/twitch/vods${qs ? `?${qs}` : ""}`);
+    return apiClient
+      .get(`/twitch/vods${qs ? `?${qs}` : ''}`)
+      .then((res) => res.data);
   },
-  importVod: (id, title) => post(`${BASE}/twitch/vods/${id}/import`, { title }),
-  searchCategories: (query) => get(`${BASE}/twitch/categories?query=${encodeURIComponent(query)}`),
+  importVod: (id, title) =>
+    apiClient
+      .post(`/twitch/vods/${id}/import`, { title })
+      .then((res) => res.data),
+  searchCategories: (query) =>
+    apiClient
+      .get(`/twitch/categories?query=${encodeURIComponent(query)}`)
+      .then((res) => res.data),
 
   // Playlist
-  getPlaylist: () => get(`${BASE}/playlist`),
-  addToPlaylist: (filename) => post(`${BASE}/playlist`, { filename }),
-  removeFromPlaylist: (id) => del(`${BASE}/playlist/${id}`),
-  reorderPlaylist: (ids) => put(`${BASE}/playlist/reorder`, { ids }),
-  togglePlaylistEntry: (id, enabled) => patch(`${BASE}/playlist/${id}`, { enabled }),
+  getPlaylist: () => apiClient.get(`/playlist`).then((res) => res.data),
+  addToPlaylist: (filename) =>
+    apiClient.post(`/playlist`, { filename }).then((res) => res.data),
+  removeFromPlaylist: (id) =>
+    apiClient.delete(`/playlist/${id}`).then((res) => res.data),
+  reorderPlaylist: (ids) =>
+    apiClient.put(`/playlist/reorder`, { ids }).then((res) => res.data),
+  togglePlaylistEntry: (id, enabled) =>
+    apiClient.patch(`/playlist/${id}`, { enabled }).then((res) => res.data),
 
   // Stream
-  getStatus: () => get(`${BASE}/stream/status`),
-  startStream: () => post(`${BASE}/stream/start`, {}),
-  stopStream: () => post(`${BASE}/stream/stop`, {}),
+  getStatus: () => apiClient.get(`/stream/status`).then((res) => res.data),
+  startStream: () =>
+    apiClient.post(`/stream/start`, {}).then((res) => res.data),
+  stopStream: () => apiClient.post(`/stream/stop`, {}).then((res) => res.data),
 
   // Stream logs (admin only)
-  getLogFiles: () => get(`${BASE}/stream/logs`),
-  getLogFile: (filename) => get(`${BASE}/stream/logs/${encodeURIComponent(filename)}`),
-  getLogFileDownloadUrl: (filename) => `${BASE}/stream/logs/${encodeURIComponent(filename)}/download`,
+  getLogFiles: () => apiClient.get(`/stream/logs`).then((res) => res.data),
+  getLogFile: (filename) =>
+    apiClient
+      .get(`/stream/logs/${encodeURIComponent(filename)}`)
+      .then((res) => res.data),
+  getLogFileDownloadUrl: (filename) =>
+    `/stream/logs/${encodeURIComponent(filename)}/download`,
 };
-

@@ -12,6 +12,7 @@ import {
   ConsoleGrid,
 } from '../components/ConsoleLayout';
 import LogsPanel from '../panels/LogsPanel';
+import TwitchMessagesPanel from '../panels/TwitchMessagesPanel';
 
 const INGEST_PRESETS = [
   { label: 'Automatisch (live.twitch.tv)', value: 'rtmp://live.twitch.tv/app' },
@@ -106,7 +107,8 @@ export default function Settings() {
           <h1>Einstellungen</h1>
         </div>
         <Button as={Link} to="/app" variant="ghost">
-          ← Zurück
+          <span className="material-symbols-outlined small">arrow_back</span>{' '}
+          Zurück
         </Button>
       </ConsoleHeader>
 
@@ -146,10 +148,12 @@ export default function Settings() {
         {(user.role === 'broadcaster' || user.role === 'admin') && (
           <UserManagementPanelFile setMessage={setMessage} />
         )}
+        {(user.role === 'broadcaster' || user.role === 'admin') && (
+          <TwitchMessagesPanel />
+        )}
+        {/* ── Stream logs (admin only) ─────────────────────────────────────────── */}
+        <LogsPanel userRole={user.role} setMessage={setMessage} />
       </ConsoleGrid>
-
-      {/* ── Stream logs (admin only) ─────────────────────────────────────────── */}
-      <LogsPanel userRole={user.role} setMessage={setMessage} />
     </Console>
   );
 }

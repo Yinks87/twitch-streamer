@@ -4,7 +4,7 @@ import { spawn, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import config from './config.js';
-import * as db from './db.js';
+import * as db from './db/db.js';
 import { readTranscript, transcriptNeedsCategory } from './utils/transcript.js';
 
 const FFMPEG_PATH = config.FFMPEG_PATH;

@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import multer from 'multer';
 
 import config from '../../config.js';
-import * as db from '../../db.js';
+import * as db from '../../db/db.js';
 import * as streamManager from '../../streamManager.js';
 import { requireAuth } from '../../middleware/index.js';
 import {

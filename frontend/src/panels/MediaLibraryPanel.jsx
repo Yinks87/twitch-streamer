@@ -110,7 +110,7 @@ function MediaLibraryItem({
               transition: 'transform 0.1s ease-in-out',
               transform: expanded ? 'rotate(90deg)' : 'rotate(270deg)',
             }}
-            class="material-symbols-outlined small"
+            className="material-symbols-outlined small"
           >
             arrow_forward_ios
           </span>
@@ -160,7 +160,7 @@ function MediaLibraryItem({
               danger
               onClick={() => onDelete(video.name)}
             >
-              <span class="material-symbols-outlined small">delete</span>
+              <span className="material-symbols-outlined small">delete</span>
             </Button>
             <Button
               type="button"
@@ -168,7 +168,7 @@ function MediaLibraryItem({
               onClick={saveTranscript}
               disabled={saving}
             >
-              <span class="material-symbols-outlined small">save</span>
+              <span className="material-symbols-outlined small">save</span>
             </Button>
           </ItemActions>
         </ItemBody>

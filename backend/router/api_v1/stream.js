@@ -1,5 +1,5 @@
 import express from 'express';
-import * as db from '../../db.js';
+import * as db from '../../db/db.js';
 import { requireAuth } from '../../middleware/index.js';
 import * as streamManager from '../../streamManager.js';
 import { validateAndProceed } from '../../twitch/api.js';

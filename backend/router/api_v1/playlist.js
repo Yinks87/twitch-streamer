@@ -1,5 +1,5 @@
 import express from 'express';
-import * as db from '../../db.js';
+import * as db from '../../db/db.js';
 import { refreshActivePlaylist } from '../../streamManager.js';
 import { readTranscript, transcriptNeedsCategory } from '../../utils/transcript.js';
 

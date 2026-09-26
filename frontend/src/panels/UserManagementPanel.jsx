@@ -4,11 +4,6 @@ import CollapsiblePanel from '../components/CollapsiblePanel';
 import { api } from '../api';
 import Button from '../components/Button';
 import { Input, Select } from '../components/FormControls';
-import {
-  VideoList,
-  VideoListItem,
-  VideoListName,
-} from '../components/VideoList';
 import { Chip, Avatar } from '@mui/material';
 
 const ROLE_LABELS = {

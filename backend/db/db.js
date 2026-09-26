@@ -1,111 +1,23 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import config from './config.js';
+import config from '../config.js';
+import { runMigrations } from './migrations.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+let db;
 
-const db = new Database(config.DB_PATH);
-db.pragma('journal_mode = WAL');
+// Opens the SQLite Database and runs migrations to secure table schemas are up to date
+async function openDatabase() {
+  db = new Database(config.DB_PATH);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  db.pragma('busy_timeout = 5000');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS settings (
-    id              INTEGER PRIMARY KEY CHECK (id = 1),
-    twitch_server   TEXT    NOT NULL DEFAULT 'rtmp://live.twitch.tv/app',
-    stream_key      TEXT    NOT NULL DEFAULT '',
-    playlist_source TEXT    NOT NULL DEFAULT 'all',
-    alt_streamer    TEXT    NOT NULL DEFAULT '',
-    loop_playlist   INTEGER NOT NULL DEFAULT 1,
-    video_bitrate_kbps INTEGER NOT NULL DEFAULT 6000,
-    audio_bitrate_kbps INTEGER NOT NULL DEFAULT 128,
-    stream_fps      INTEGER NOT NULL DEFAULT 60,
-    restart_interval_seconds INTEGER NOT NULL DEFAULT 169200,
-    restart_delay_seconds INTEGER NOT NULL DEFAULT 5,
-    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
-  );
+  await runMigrations(db);
 
-  INSERT OR IGNORE INTO settings (id) VALUES (1);
-
-  CREATE TABLE IF NOT EXISTS users (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    twitch_user_id   TEXT    UNIQUE NOT NULL,
-    login            TEXT    NOT NULL,
-    display_name     TEXT    NOT NULL,
-    access_token     TEXT    NOT NULL,
-    refresh_token    TEXT,
-    token_expires_at TEXT,
-      broadcaster_type TEXT,
-      managers         TEXT NOT NULL DEFAULT '[]',
-    profile_image_url TEXT,
-    role             TEXT NOT NULL DEFAULT 'manager',
-    session_token    TEXT    UNIQUE,
-    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at       TEXT    NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS playlist (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    position   INTEGER NOT NULL DEFAULT 0,
-    source     TEXT    NOT NULL DEFAULT 'upload',
-    title      TEXT    NOT NULL DEFAULT '',
-    filename   TEXT    NOT NULL,
-    vod_id     TEXT,
-    status     TEXT    NOT NULL DEFAULT 'ready',
-    enabled    INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT    NOT NULL DEFAULT (datetime('now'))
-  );
-`);
-
-const settingColumns = db
-  .prepare('PRAGMA table_info(settings)')
-  .all()
-  .map((column) => column.name);
-if (!settingColumns.includes('video_bitrate_kbps'))
-  db.exec(
-    'ALTER TABLE settings ADD COLUMN video_bitrate_kbps INTEGER NOT NULL DEFAULT 6000',
-  );
-if (!settingColumns.includes('audio_bitrate_kbps'))
-  db.exec(
-    'ALTER TABLE settings ADD COLUMN audio_bitrate_kbps INTEGER NOT NULL DEFAULT 128',
-  );
-if (!settingColumns.includes('stream_fps'))
-  db.exec(
-    'ALTER TABLE settings ADD COLUMN stream_fps INTEGER NOT NULL DEFAULT 60',
-  );
-if (!settingColumns.includes('restart_interval_seconds'))
-  db.exec(
-    'ALTER TABLE settings ADD COLUMN restart_interval_seconds INTEGER NOT NULL DEFAULT 169200',
-  );
-if (!settingColumns.includes('restart_delay_seconds'))
-  db.exec(
-    'ALTER TABLE settings ADD COLUMN restart_delay_seconds INTEGER NOT NULL DEFAULT 5',
-  );
-
-const userColumns = db
-  .prepare('PRAGMA table_info(users)')
-  .all()
-  .map((column) => column.name);
-if (!userColumns.includes('broadcaster_type'))
-  db.exec('ALTER TABLE users ADD COLUMN broadcaster_type TEXT');
-if (!userColumns.includes('managers'))
-  db.exec("ALTER TABLE users ADD COLUMN managers TEXT NOT NULL DEFAULT '[]'");
-if (!userColumns.includes('role'))
-  db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'manager'");
-if (!userColumns.includes('profile_image_url'))
-  db.exec('ALTER TABLE users ADD COLUMN profile_image_url TEXT');
-
-const permittedUser = String(config.TWITCH_PERMITTED_USER || '')
-  .trim()
-  .toLowerCase();
-if (permittedUser) {
-  db.prepare(
-    `
-    UPDATE users
-    SET role = 'broadcaster'
-    WHERE lower(twitch_user_id) = ? OR lower(login) = ? OR lower(display_name) = ?
-  `,
-  ).run(permittedUser, permittedUser, permittedUser);
+  return db;
 }
 
 // --- Settings ---
@@ -113,7 +25,7 @@ if (permittedUser) {
 export function getSettings() {
   const row = db
     .prepare(
-      'SELECT twitch_server, stream_key, playlist_source, alt_streamer, loop_playlist, video_bitrate_kbps, audio_bitrate_kbps, stream_fps, restart_interval_seconds, restart_delay_seconds, updated_at FROM settings WHERE id = 1',
+      'SELECT twitch_server, stream_key, playlist_source, alt_streamer, loop_playlist, video_bitrate_kbps, audio_bitrate_kbps, stream_fps, restart_interval_seconds, restart_delay_seconds, chat_messages_enabled, chat_messages, updated_at FROM settings WHERE id = 1',
     )
     .get();
   return {
@@ -127,6 +39,8 @@ export function getSettings() {
     streamFps: row.stream_fps,
     restartIntervalSeconds: row.restart_interval_seconds,
     restartDelaySeconds: row.restart_delay_seconds,
+    chatMessagesEnabled: row.chat_messages_enabled === 1,
+    chatMessages: JSON.parse(row.chat_messages),
     updatedAt: row.updated_at,
   };
 }
@@ -142,10 +56,12 @@ export function saveSettings({
   streamFps,
   restartIntervalSeconds,
   restartDelaySeconds,
+  chatMessagesEnabled,
+  chatMessages,
 } = {}) {
   const cur = getSettings();
   db.prepare(
-    `UPDATE settings SET twitch_server = ?, stream_key = ?, playlist_source = ?, alt_streamer = ?, loop_playlist = ?, video_bitrate_kbps = ?, audio_bitrate_kbps = ?, stream_fps = ?, restart_interval_seconds = ?, restart_delay_seconds = ?, updated_at = datetime('now') WHERE id = 1`,
+    `UPDATE settings SET twitch_server = ?, stream_key = ?, playlist_source = ?, alt_streamer = ?, loop_playlist = ?, video_bitrate_kbps = ?, audio_bitrate_kbps = ?, stream_fps = ?, restart_interval_seconds = ?, restart_delay_seconds = ?, chat_messages_enabled = ?, chat_messages = ?, updated_at = datetime('now') WHERE id = 1`,
   ).run(
     twitchServer ?? cur.twitchServer,
     streamKey ?? cur.streamKey,
@@ -163,6 +79,14 @@ export function saveSettings({
     streamFps ?? cur.streamFps,
     restartIntervalSeconds ?? cur.restartIntervalSeconds,
     restartDelaySeconds ?? cur.restartDelaySeconds,
+    chatMessagesEnabled !== undefined
+      ? chatMessagesEnabled
+        ? 1
+        : 0
+      : cur.chatMessagesEnabled
+        ? 1
+        : 0,
+    JSON.stringify(chatMessages ?? cur.chatMessages),
   );
   return getSettings();
 }
@@ -247,7 +171,14 @@ export function addManager({
     VALUES (?, ?, ?, '', ?, ?, '[]', ?)
   `,
     )
-    .run(twitchUserId, login, displayName, broadcasterType ?? null, profileImageUrl ?? null, safeRole);
+    .run(
+      twitchUserId,
+      login,
+      displayName,
+      broadcasterType ?? null,
+      profileImageUrl ?? null,
+      safeRole,
+    );
   return db
     .prepare(
       'SELECT id, twitch_user_id, login, display_name, broadcaster_type, profile_image_url, role, created_at FROM users WHERE id = ?',
@@ -258,7 +189,9 @@ export function addManager({
 export function removeManager(id) {
   return (
     db
-      .prepare("DELETE FROM users WHERE id = ? AND role IN ('manager', 'admin')")
+      .prepare(
+        "DELETE FROM users WHERE id = ? AND role IN ('manager', 'admin')",
+      )
       .run(id).changes > 0
   );
 }
@@ -281,7 +214,13 @@ export function getUserByTwitchId(twitchUserId) {
 }
 
 export function getBroadcasterUser() {
-  return db.prepare("SELECT * FROM users WHERE role = 'broadcaster' ORDER BY updated_at DESC LIMIT 1").get() ?? null;
+  return (
+    db
+      .prepare(
+        "SELECT * FROM users WHERE role = 'broadcaster' ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get() ?? null
+  );
 }
 
 export function clearSession(sessionToken) {
@@ -385,4 +324,4 @@ export function getAnyUser() {
   );
 }
 
-export { db };
+export { db, openDatabase };

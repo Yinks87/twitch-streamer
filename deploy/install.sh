@@ -3,6 +3,9 @@
 # Erstinstallation: sudo ./deploy/install.sh <sub>.duckdns.org [duckdns-token]
 # Update:          sudo ./deploy/install.sh update
 # Daten zurücksetzen: sudo ./deploy/install.sh reset
+
+# TODO: Add nice colors and Messages for better UX
+
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"

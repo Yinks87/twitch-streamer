@@ -1,13 +1,13 @@
 import axios from 'axios';
 
-import * as db from '../db.js';
+import * as db from '../db/db.js';
 import config from '../config.js';
 
-const authAPI = axios.create({
+export const authAPI = axios.create({
   baseURL: 'https://id.twitch.tv/oauth2',
 });
 
-const twitchAPI = axios.create({
+export const twitchAPI = axios.create({
   baseURL: 'https://api.twitch.tv/helix',
 });
 
@@ -245,4 +245,40 @@ export function startAccessTokenValidationLoop(intervalMs = 59 * 60 * 1000) {
 
   globalThis.__twitchTokenValidationLoop = { timer, intervalMs };
   return globalThis.__twitchTokenValidationLoop;
+}
+
+export async function sendChatMessage({
+  access_token,
+  broadcaster_id,
+  sender_id,
+  message,
+  reply_parent_message_id = null,
+}) {
+  return validateAndProceed(access_token, async (validToken) => {
+    const body = {
+      broadcaster_id,
+      sender_id,
+      message,
+      reply_parent_message_id,
+    };
+
+    try {
+      const {
+        data: { data },
+      } = await twitchAPI.post(`/chat/messages`, body, {
+        headers: {
+          'Client-ID': TWITCH_CLIENT_ID,
+          Authorization: `Bearer ${validToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      return data;
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+      throw new Error(
+        `Failed to send chat message: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+      );
+    }
+  });
 }

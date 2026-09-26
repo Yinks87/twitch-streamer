@@ -1,21 +1,23 @@
 ﻿import fs from 'node:fs';
-import path from 'node:path';
 import express from 'express';
 import cors from 'cors';
 
 import config from './config.js';
-import * as db from './db.js';
+import * as db from './db/db.js';
 import * as streamManager from './streamManager.js';
 import { streamEvents } from './streamManager.js';
 import baseRouter from './router/index.js';
-import { applyChannelUpdate, startAccessTokenValidationLoop } from './twitch/api.js';
+import {
+  applyChannelUpdate,
+  sendChatMessage,
+  startAccessTokenValidationLoop,
+} from './twitch/api.js';
 import { readTranscript } from './utils/transcript.js';
+import { parseTemplate } from './utils/template-parser.js';
 
-const {
-  PORT,
-  VIDEOS_DIR,
-  FRONTEND_URL,
-} = config;
+const { PORT, VIDEOS_DIR, FRONTEND_URL } = config;
+
+await db.openDatabase();
 
 if (!fs.existsSync(VIDEOS_DIR)) {
   fs.mkdirSync(VIDEOS_DIR, { recursive: true });
@@ -43,9 +45,7 @@ if (!fs.existsSync(VIDEOS_DIR)) {
   // No automatic re-encode queue exists anymore; recover any stale rows from
   // an older version so entries don't stay stuck as 'processing' forever.
   db.db
-    .prepare(
-      "UPDATE playlist SET status = 'ready' WHERE status = 'processing'",
-    )
+    .prepare("UPDATE playlist SET status = 'ready' WHERE status = 'processing'")
     .run();
 }
 
@@ -92,41 +92,86 @@ function clearPendingTimestamps() {
 
 streamEvents.on('streamStopped', clearPendingTimestamps);
 
-streamEvents.on('videoChanged', (filename) => {
+streamEvents.on('videoChanged', async (filename) => {
   clearPendingTimestamps();
 
   const meta = readTranscript(filename);
   if (!meta) return;
 
-  const timestamps = Array.isArray(meta.timestamps) && meta.timestamps.length > 0
-    ? meta.timestamps
-    : [{ time: '00:00:00', category: '', category_id: null, title: '' }];
+  const timestamps =
+    Array.isArray(meta.timestamps) && meta.timestamps.length > 0
+      ? meta.timestamps
+      : [{ time: '00:00:00', category: '', category_id: null, title: '' }];
 
-  // Channel updates must use the broadcaster's own token — using any logged-in user
-  // (e.g. a manager) fails or silently updates the wrong channel.
   const user = db.getBroadcasterUser();
+  let settings, chatMessagesEnabled, chatMessages;
+
   if (!user) return;
 
   const first = timestamps[0];
-  applyChannelUpdate(
+  await applyChannelUpdate(
     user.access_token,
     first.title || '',
     first.category || '',
     first.category_id ?? null,
-  ).catch((err) => console.error('[channel-update] error:', err.message));
+  )
+    .then(() => {
+      settings = db.getSettings();
+      chatMessagesEnabled = settings?.chatMessagesEnabled;
+      chatMessages = settings?.chatMessages;
+      if (chatMessagesEnabled) {
+        sendChatMessage({
+          access_token: user.access_token,
+          sender_id: user.twitch_user_id,
+          broadcaster_id: user.twitch_user_id,
+          message: parseTemplate(chatMessages.currentVideo, {
+            title: first.title || '',
+            category: first.category || '',
+          }),
+        });
+      } else {
+        console.log('[channel-update] chat messages are disabled.');
+      }
+    })
+    .catch((err) => console.error('[channel-update] error:', err.message));
 
   for (const ts of timestamps.slice(1)) {
     const secs = parseTimestamp(ts.time);
     if (secs <= 0) continue;
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       const freshUser = db.getBroadcasterUser();
       if (!freshUser) return;
-      applyChannelUpdate(
+      await applyChannelUpdate(
         freshUser.access_token,
         ts.title,
         ts.category,
         ts.category_id,
-      ).catch((err) => console.error('[channel-update] timeout error:', err.message));
+      )
+        .then(() => {
+          // Refresh settings before sending chat message
+          settings = db.getSettings();
+          chatMessagesEnabled = settings?.chatMessagesEnabled;
+          chatMessages = settings?.chatMessages;
+
+          if (chatMessagesEnabled) {
+            sendChatMessage({
+              access_token: freshUser.access_token,
+              sender_id: freshUser.twitch_user_id,
+              broadcaster_id: freshUser.twitch_user_id,
+              message: parseTemplate(chatMessages.currentVideo, {
+                title: ts.title || '',
+                category: ts.category || '',
+              }),
+            });
+          } else {
+            console.log('[channel-update] chat messages are disabled.');
+          }
+        })
+        .catch((err) =>
+          console.error('[channel-update] timeout error:', err.message),
+        );
+
+      console.log('[channel-update] completed for timestamp:', ts.time);
     }, secs * 1000);
     pendingTimestampTimeouts.push(t);
   }

@@ -62,7 +62,7 @@ export default function LogsPanel({ userRole, setMessage }) {
   }
 
   return (
-    <CollapsiblePanel storageKey="logs" title="Stream-Logs" style={{ marginTop: '1rem' }}>
+    <CollapsiblePanel storageKey="logs" title="Stream-Logs">
       <PanelHeader>
         <Button variant="ghost" onClick={loadLogs} disabled={loading}>
           Aktualisieren
@@ -82,7 +82,10 @@ export default function LogsPanel({ userRole, setMessage }) {
                   </LogMeta>
                 </div>
                 <LogActions>
-                  <Button variant="ghost" onClick={() => handleView(log.filename)}>
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleView(log.filename)}
+                  >
                     {openFilename === log.filename ? 'Schließen' : 'Anzeigen'}
                   </Button>
                   <Button
@@ -96,9 +99,7 @@ export default function LogsPanel({ userRole, setMessage }) {
                 </LogActions>
               </LogRow>
               {openFilename === log.filename && (
-                <LogContent>
-                  {contentLoading ? 'Lädt…' : content}
-                </LogContent>
+                <LogContent>{contentLoading ? 'Lädt…' : content}</LogContent>
               )}
             </LogItem>
           ))}

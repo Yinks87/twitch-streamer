@@ -1,7 +1,7 @@
 import express from 'express';
 
 import config from '../../config.js';
-import * as db from '../../db.js';
+import * as db from '../../db/db.js';
 import { requireAuth } from '../../middleware/index.js';
 
 const usersRouter = express.Router();

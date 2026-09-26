@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { spawn, execSync } from 'node:child_process';
 
 import config from '../../config.js';
-import * as db from '../../db.js';
+import * as db from '../../db/db.js';
 import { requireAuth } from '../../middleware/index.js';
 import { writeTranscript, readTranscript, transcriptNeedsCategory, TRANSCRIPTS_DIR } from '../../utils/transcript.js';
 

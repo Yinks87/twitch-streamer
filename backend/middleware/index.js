@@ -1,4 +1,4 @@
-import * as db from '../db.js';
+import * as db from '../db/db.js';
 
 export function getSessionToken(req) {
   const raw = req.headers.cookie || '';

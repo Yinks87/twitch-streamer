@@ -248,7 +248,7 @@ function TimestampCard({ timestamp, index, storageKey, onChange, onRemove }) {
               transition: 'transform 0.1s ease-in-out',
               transform: expanded ? 'rotate(90deg)' : 'rotate(270deg)',
             }}
-            class="material-symbols-outlined small"
+            className="material-symbols-outlined small"
           >
             arrow_forward_ios
           </span>
@@ -306,7 +306,7 @@ function TimestampCard({ timestamp, index, storageKey, onChange, onRemove }) {
                 onClick={onRemove}
                 style={{ fontSize: '0.75rem', flexShrink: 0 }}
               >
-                <span class="material-symbols-outlined small">delete</span>
+                <span className="material-symbols-outlined small">delete</span>
               </Button>
             )}
           </div>

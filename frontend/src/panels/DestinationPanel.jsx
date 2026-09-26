@@ -3,7 +3,6 @@ import CollapsiblePanel from '../components/CollapsiblePanel';
 import NumberInput from '../components/NumberInput';
 import DurationInput from '../components/DurationInput';
 import Button from '../components/Button';
-import Banner from '../components/Banner';
 import { Input, Select } from '../components/FormControls';
 
 export default function DestinationPanel({
@@ -25,15 +24,6 @@ export default function DestinationPanel({
         Stream-Key wurde nach dem Login automatisch geladen.
       </Hint>
       <Form onSubmit={onSave}>
-        {Number(settings.videoBitrateKbps) > 6000 &&
-          !['affiliate', 'partner'].includes(
-            String(user.broadcasterType || '').toLowerCase(),
-          ) && (
-            <Banner type="error" role="alert">
-              Achtung, Twitch erlaubt für nicht Affiliate oder Partner Streamer
-              nicht mehr als 6000kbps
-            </Banner>
-          )}
         <Field>
           <span>Ingest-Server</span>
           <Select
@@ -130,7 +120,7 @@ export default function DestinationPanel({
             <span>Framerate (FPS)</span>
             <NumberInput
               value={settings.streamFps}
-              min={1}
+              min={30}
               max={120}
               step={1}
               onChange={(value) =>
@@ -220,4 +210,3 @@ const RestartRow = styled.div`
     grid-template-columns: 1fr;
   }
 `;
-
