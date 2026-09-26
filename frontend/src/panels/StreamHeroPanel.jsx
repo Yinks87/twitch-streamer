@@ -6,6 +6,7 @@ import { useStatusContext } from '../context/StatusContext';
 import { api } from '../api';
 import Button from '../components/Button';
 import { Select } from '../components/FormControls';
+import Checkbox from '../components/Checkbox';
 
 const SOURCE_LABELS = {
   all: 'Alle',
@@ -98,29 +99,31 @@ const StreamHeroPanel = ({
       title="Streamsteuerung"
       variant="hero"
     >
-      <SignalLight state={lightState} aria-hidden="true" />
-      <HeroBody>
-        <HeroState>
-          {status.running
-            ? 'ON AIR'
-            : readyPlaylist.length === 0
-              ? 'Keine Videos'
-              : 'Bereit'}
-        </HeroState>
-        <HeroDetail>
-          {status.running ? (
-            <>
-              Läuft seit <Uptime startedAt={status.startedAt} /> · PID{' '}
-              {status.pid ?? '–'}
-            </>
-          ) : (
-            `${readyPlaylist.length} Item(s) in der Playlist`
+      <HeroStateWrapper>
+        <SignalLight state={lightState} aria-hidden="true" />
+        <HeroBody>
+          <HeroState>
+            {status.running
+              ? 'ON AIR'
+              : readyPlaylist.length === 0
+                ? 'Keine Videos'
+                : 'Bereit'}
+          </HeroState>
+          <HeroDetail>
+            {status.running ? (
+              <>
+                Läuft seit <Uptime startedAt={status.startedAt} /> · PID{' '}
+                {status.pid ?? '–'}
+              </>
+            ) : (
+              `${readyPlaylist.length} Item(s) in der Playlist`
+            )}
+          </HeroDetail>
+          {currentVideoTitle && (
+            <NowPlaying>Läuft gerade: {currentVideoTitle}</NowPlaying>
           )}
-        </HeroDetail>
-        {currentVideoTitle && (
-          <NowPlaying>Läuft gerade: {currentVideoTitle}</NowPlaying>
-        )}
-      </HeroBody>
+        </HeroBody>
+      </HeroStateWrapper>
 
       <HeroControls>
         <ModeToggle>
@@ -141,8 +144,7 @@ const StreamHeroPanel = ({
         </ModeToggle>
 
         <LoopToggle>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={!!settings.loopPlaylist}
             disabled={status.running}
             onChange={async (e) => {
@@ -154,25 +156,27 @@ const StreamHeroPanel = ({
                 setMessage({ type: 'error', text: err.message });
               }
             }}
+            label={'Playlist Loop aktivieren'}
           />
-          <span>Loop</span>
         </LoopToggle>
 
         {status.running ? (
           <Button variant="stop" onClick={handleStop} disabled={busy}>
-            Stream stoppen
+            <span className="material-symbols-outlined">stop_circle</span>
           </Button>
         ) : (
           <Button
             variant="start"
+            title="Stream Starten"
             onClick={handleStart}
             disabled={
               busy ||
               readyPlaylist.length === 0 ||
-              (['broadcaster', 'admin'].includes(userRole) && !settings.streamKey)
+              (['broadcaster', 'admin'].includes(userRole) &&
+                !settings.streamKey)
             }
           >
-            Stream starten
+            <span className="material-symbols-outlined">play_circle</span>
           </Button>
         )}
       </HeroControls>
@@ -208,8 +212,20 @@ const SignalLight = styled.div`
     `};
 `;
 
+const HeroStateWrapper = styled.div`
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  gap: 4px;
+`;
+
 const HeroBody = styled.div`
-  flex: 1 1 220px;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  margin:auto;
 `;
 
 const HeroState = styled.p`
@@ -235,8 +251,8 @@ const NowPlaying = styled.p`
 
 const HeroControls = styled.div`
   display: flex;
-  align-items: flex-end;
-  gap: 14px;
+  flex-direction: column;
+  gap: 0.875rem;
   flex-wrap: wrap;
 `;
 
