@@ -100,4 +100,8 @@ export const api = {
       .then((res) => res.data),
   getLogFileDownloadUrl: (filename) =>
     `/stream/logs/${encodeURIComponent(filename)}/download`,
+  deleteLogFile: (filename) =>
+    apiClient
+      .delete(`/stream/logs/${encodeURIComponent(filename)}`)
+      .then((res) => res.data),
 };

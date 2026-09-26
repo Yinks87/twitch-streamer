@@ -1,12 +1,5 @@
-/**
- * TODO: Implement stream timed restart event
- * only post a notification to the chat if the restart event is scheduled.
- * This ensures that viewer are informed about the upcoming restart.
- * 
- * do NOT update channel credentials to first timestamp on this event, only do it on actual stream/video start
- */
-
-
+// Scheduled restarts notify chat before ffmpeg stops; videoChanged remains the
+// only event that updates channel metadata for the next stream/video start.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
@@ -15,8 +8,6 @@ import { EventEmitter } from 'node:events';
 import config from './config.js';
 import * as db from './db/db.js';
 import { readTranscript, transcriptNeedsCategory } from './utils/transcript.js';
-import { sendChatMessage } from './twitch/api.js';
-import { parseTemplate } from './utils/template-parser.js';
 
 const FFMPEG_PATH = config.FFMPEG_PATH;
 // Twitch allows up to 8000 kbps / 60 fps; matches OBS's default "veryfast" x264 profile.
@@ -41,6 +32,7 @@ const MAX_LOG_LINES = 200;
 const MAX_LOG_FILE_BYTES = 1_000_000;
 
 // Emits 'videoChanged' with the filename whenever ffmpeg opens a new video file.
+// The initial event on reconnect also includes the saved in-video offset.
 export const streamEvents = new EventEmitter();
 
 let ffmpegProcess = null;
@@ -220,6 +212,17 @@ export function readLogFile(filename) {
     filename: file.filename,
     content: `${file.size > bytesToRead ? '[Earlier log content omitted]\n' : ''}${buffer.toString('utf8')}`,
   };
+}
+
+export function deleteLogFile(filename) {
+  const filePath = getLogFilePath(filename);
+  if (!filePath) return false;
+  try {
+    fs.unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function listVideoFiles() {
@@ -637,6 +640,9 @@ export async function startStream({
       scheduledRestartAt = null;
       if (!ffmpegProcess || !activeStreamConfig) return;
       scheduledRestartRequested = true;
+      streamEvents.emit('scheduledRestart', {
+        delaySeconds: activeStreamConfig.restartDelaySeconds,
+      });
       pushLog(
         'Scheduled restart reached; stopping ffmpeg at the current video position.',
       );
@@ -658,7 +664,10 @@ export async function startStream({
     cycleOffset = -resumeOffset;
   }
 
-  streamEvents.emit('videoChanged', entries[0].filename);
+  streamEvents.emit('videoChanged', entries[0].filename, {
+    resumed: Boolean(resumeFrom),
+    offset: resumeOffset,
+  });
 
   let stdoutBuf = '';
   ffmpegProcess.stdout.on('data', (chunk) => {
@@ -773,20 +782,6 @@ export async function startStream({
         : `RTMP connection ended; reconnecting in ${reconnectDelaySeconds} seconds.`,
     );
 
-    const newSettings = db.getSettings();
-    const user = db.getBroadcasterUser();
-
-    if (isScheduledRestart && newSettings.chatMessagesEnabled) {
-      await sendChatMessage({
-        access_token: user.access_token,
-        broadcaster_id: user.twitch_user_id,
-        sender_id: user.twitch_user_id,
-        message: parseTemplate(
-          newSettings?.chatMessages?.restartMessage || '',
-          { duration: reconnectDelaySeconds },
-        ),
-      });
-    }
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (!activeStreamConfig || isRunning()) return;

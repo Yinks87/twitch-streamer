@@ -92,7 +92,24 @@ function clearPendingTimestamps() {
 
 streamEvents.on('streamStopped', clearPendingTimestamps);
 
-streamEvents.on('videoChanged', async (filename) => {
+streamEvents.on('scheduledRestart', async ({ delaySeconds }) => {
+  const settings = db.getSettings();
+  const user = db.getBroadcasterUser();
+  const message = settings?.chatMessages?.restartMessage;
+
+  if (!user || !settings?.chatMessagesEnabled || !message) return;
+
+  await sendChatMessage({
+    access_token: user.access_token,
+    broadcaster_id: user.twitch_user_id,
+    sender_id: user.twitch_user_id,
+    message: parseTemplate(message, { duration: delaySeconds }),
+  }).catch((err) =>
+    console.error('[scheduled-restart] chat notification error:', err.message),
+  );
+});
+
+streamEvents.on('videoChanged', async (filename, context = {}) => {
   clearPendingTimestamps();
 
   const meta = readTranscript(filename);
@@ -108,36 +125,45 @@ streamEvents.on('videoChanged', async (filename) => {
 
   if (!user) return;
 
-  const first = timestamps[0];
-  await applyChannelUpdate(
-    user.access_token,
-    first.title || '',
-    first.category || '',
-    first.category_id ?? null,
-  )
-    .then(() => {
-      settings = db.getSettings();
-      chatMessagesEnabled = settings?.chatMessagesEnabled;
-      chatMessages = settings?.chatMessages;
-      if (chatMessagesEnabled) {
-        sendChatMessage({
-          access_token: user.access_token,
-          sender_id: user.twitch_user_id,
-          broadcaster_id: user.twitch_user_id,
-          message: parseTemplate(chatMessages.currentVideo, {
-            title: first.title || '',
-            category: first.category || '',
-          }),
-        });
-      } else {
-        console.log('[channel-update] chat messages are disabled.');
-      }
-    })
-    .catch((err) => console.error('[channel-update] error:', err.message));
+  const resumed = context.resumed === true;
+  const resumeOffset = resumed ? Math.max(0, Number(context.offset) || 0) : 0;
 
-  for (const ts of timestamps.slice(1)) {
+  // A reconnect must keep the metadata already active on Twitch. The next
+  // transcript marker after the saved offset will apply the next update.
+  if (!resumed) {
+    const first = timestamps[0];
+    await applyChannelUpdate(
+      user.access_token,
+      first.title || '',
+      first.category || '',
+      first.category_id ?? null,
+    )
+      .then(() => {
+        settings = db.getSettings();
+        chatMessagesEnabled = settings?.chatMessagesEnabled;
+        chatMessages = settings?.chatMessages;
+        if (chatMessagesEnabled) {
+          sendChatMessage({
+            access_token: user.access_token,
+            sender_id: user.twitch_user_id,
+            broadcaster_id: user.twitch_user_id,
+            message: parseTemplate(chatMessages.currentVideo, {
+              title: first.title || '',
+              category: first.category || '',
+            }),
+          });
+        } else {
+          console.log('[channel-update] chat messages are disabled.');
+        }
+      })
+      .catch((err) => console.error('[channel-update] error:', err.message));
+  }
+
+  const pendingTimestamps = resumed ? timestamps : timestamps.slice(1);
+  for (const ts of pendingTimestamps) {
     const secs = parseTimestamp(ts.time);
-    if (secs <= 0) continue;
+    const delaySecs = secs - resumeOffset;
+    if (delaySecs <= 0) continue;
     const t = setTimeout(async () => {
       const freshUser = db.getBroadcasterUser();
       if (!freshUser) return;
@@ -172,7 +198,7 @@ streamEvents.on('videoChanged', async (filename) => {
         );
 
       console.log('[channel-update] completed for timestamp:', ts.time);
-    }, secs * 1000);
+    }, delaySecs * 1000);
     pendingTimestampTimeouts.push(t);
   }
 });

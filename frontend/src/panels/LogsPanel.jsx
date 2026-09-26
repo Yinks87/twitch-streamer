@@ -22,8 +22,9 @@ export default function LogsPanel({ userRole, setMessage }) {
   const [openFilename, setOpenFilename] = useState(null);
   const [content, setContent] = useState('');
   const [contentLoading, setContentLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  const isAdmin = userRole === 'admin';
+  const isAdmin = userRole === 'admin' || userRole === 'broadcaster';
 
   const loadLogs = useCallback(async () => {
     setLoading(true);
@@ -61,10 +62,34 @@ export default function LogsPanel({ userRole, setMessage }) {
     }
   }
 
+  const handleDelete = async (filename) => {
+    setDeleting(true);
+    try {
+      const res = await api.deleteLogFile(filename);
+      if (res.ok) {
+        setLogs((prevLogs) =>
+          prevLogs.filter((log) => log.filename !== filename),
+        );
+        if (openFilename === filename) {
+          setOpenFilename(null);
+          setContent('');
+        }
+        setDeleting(false);
+      } else {
+        setMessage?.({ type: 'error', text: 'Failed to delete log file.' });
+      }
+    } catch (err) {
+      setMessage?.({ type: 'error', text: err.message });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <CollapsiblePanel storageKey="logs" title="Stream-Logs">
       <PanelHeader>
         <Button variant="ghost" onClick={loadLogs} disabled={loading}>
+          <span className="material-symbols-outlined">autorenew</span>{' '}
           Aktualisieren
         </Button>
       </PanelHeader>
@@ -94,7 +119,15 @@ export default function LogsPanel({ userRole, setMessage }) {
                     href={api.getLogFileDownloadUrl(log.filename)}
                     download={log.filename}
                   >
+                    <span className="material-symbols-outlined">download</span>{' '}
                     Herunterladen
+                  </Button>
+                  <Button
+                    danger
+                    disabled={deleting}
+                    onClick={() => handleDelete(log.filename)}
+                  >
+                    <span className="material-symbols-outlined">delete</span>
                   </Button>
                 </LogActions>
               </LogRow>
