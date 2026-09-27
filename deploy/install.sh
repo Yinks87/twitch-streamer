@@ -6,6 +6,37 @@
 
 # TODO: Add nice colors and Messages for better UX
 
+# Color detection and setup
+setup_colors() {
+    # Check if stdout is a terminal and supports colors
+    if [[ -t 1 ]] && command -v tput &> /dev/null && tput colors &> /dev/null && [ $(tput colors) -ge 8 ]; then
+        # Bright and more readable colors
+        ERROR='\033[1;31m'      # Bright Red - for errors
+        SUCCESS='\033[1;32m'    # Bright Green - for success messages  
+        WARNING='\033[1;33m'    # Bright Yellow - for warnings
+        INFO='\033[1;36m'       # Bright Cyan - for information
+        HEADER='\033[1;34m'     # Bright Blue - for headers/titles
+        HIGHLIGHT='\033[1;35m'  # Bright Magenta - for highlighting important text
+        MUTED='\033[0;37m'      # Light Gray - for less important text
+        BOLD='\033[1m'          # Bold text
+        NC='\033[0m'            # No Color/Reset
+    else
+        # No color support or non-terminal output
+        ERROR=''
+        SUCCESS=''
+        WARNING=''
+        INFO=''
+        HEADER=''
+        HIGHLIGHT=''
+        MUTED=''
+        BOLD=''
+        NC=''
+    fi
+}
+
+# Initialize colors
+setup_colors
+
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,6 +56,7 @@ Verwendung:
 
   sudo ./deploy/install.sh reset
       Löscht Datenbank, Logs und Videos nach einer Sicherheitsabfrage.
+      Startet die Container nach dem Reset neu und erstellt eine neue leere Datenbank.
 
   sudo ./deploy/install.sh -h
   sudo ./deploy/install.sh --help

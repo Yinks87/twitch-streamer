@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import styled from '@emotion/styled';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import Button from '../components/Button';
 import Banner from '../components/Banner';
 import { Eyebrow } from '../components/ConsoleLayout';
 import PageLoading from '../components/PageLoading';
+import icon from '../assets/icon.png';
 
 // ── Login page (/) ────────────────────────────────────────────────────────────
 export default function Login() {
@@ -31,25 +33,11 @@ export default function Login() {
   if (checking) return <PageLoading page="Login-Seite" />;
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '1.5rem',
-        padding: '2rem',
-      }}
-    >
+    <Container>
+      <IconImage src={icon} alt="Twitch 24/7 Player Icon" />
       <Eyebrow>
         Erstelle deine 24/7 Twitch Playlist und streame auf einen Twitch-Kanal
       </Eyebrow>
-      <h1 style={{ margin: 0 }}>Twitch 24/7 Player</h1>
-      <p style={{ opacity: 0.65, maxWidth: '360px', textAlign: 'center' }}>
-        Melde dich mit deinem Twitch-Konto an.
-      </p>
-
       {error && (
         <Banner type="error" role="alert">
           {error}
@@ -68,6 +56,25 @@ export default function Login() {
       >
         Mit Twitch anmelden
       </Button>
-    </div>
+    </Container>
   );
 }
+
+const Container = styled.div`
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 2rem;
+  /* position: relative; */
+`;
+
+const IconImage = styled.img`
+  /* position: absolute; */
+  width: 240px;
+  height: 240px;
+  border-radius: 25px;
+  z-index: -1;
+`;
