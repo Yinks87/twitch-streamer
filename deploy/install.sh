@@ -4,38 +4,55 @@
 # Update:          sudo ./deploy/install.sh update
 # Daten zurücksetzen: sudo ./deploy/install.sh reset
 
-# TODO: Add nice colors and Messages for better UX
-
-# Color detection and setup
+# Color detection and terminal output helpers
 setup_colors() {
-    # Check if stdout is a terminal and supports colors
-    if [[ -t 1 ]] && command -v tput &> /dev/null && tput colors &> /dev/null && [ $(tput colors) -ge 8 ]; then
-        # Bright and more readable colors
-        ERROR='\033[1;31m'      # Bright Red - for errors
-        SUCCESS='\033[1;32m'    # Bright Green - for success messages  
-        WARNING='\033[1;33m'    # Bright Yellow - for warnings
-        INFO='\033[1;36m'       # Bright Cyan - for information
-        HEADER='\033[1;34m'     # Bright Blue - for headers/titles
-        HIGHLIGHT='\033[1;35m'  # Bright Magenta - for highlighting important text
-        MUTED='\033[0;37m'      # Light Gray - for less important text
-        BOLD='\033[1m'          # Bold text
-        NC='\033[0m'            # No Color/Reset
+    if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+        ERROR=$'\033[1;31m'
+        SUCCESS=$'\033[1;32m'
+        WARNING=$'\033[1;33m'
+        INFO=$'\033[1;36m'
+        ACCENT=$'\033[1;35m'
+        MUTED=$'\033[0;37m'
+        BOLD=$'\033[1m'
+        RESET=$'\033[0m'
     else
-        # No color support or non-terminal output
         ERROR=''
         SUCCESS=''
         WARNING=''
         INFO=''
-        HEADER=''
-        HIGHLIGHT=''
+        ACCENT=''
         MUTED=''
         BOLD=''
-        NC=''
+        RESET=''
     fi
 }
 
-# Initialize colors
 setup_colors
+
+print_step() {
+  printf '\n%s==>%s %s\n' "$INFO" "$RESET" "$*"
+}
+
+print_success() {
+  printf '%s%s%s\n' "$SUCCESS" "$*" "$RESET"
+}
+
+print_warning() {
+  printf '%s%s%s\n' "$WARNING" "$*" "$RESET"
+}
+
+print_error() {
+  printf '%s%s%s\n' "$ERROR" "$*" "$RESET" >&2
+}
+
+print_install_logo() {
+  printf '\n%s  +--------------------------------------+%s\n' "$INFO" "$RESET"
+  printf '  %s|%s  %s[>]  %sTWITCH STREAMER%s             %s|%s\n' \
+    "$INFO" "$RESET" "$ACCENT" "$BOLD" "$RESET" "$INFO" "$RESET"
+  printf '  %s|%s     24/7 PLAYER / VPS INSTALLER     %s|%s\n' \
+    "$INFO" "$RESET" "$INFO" "$RESET"
+  printf '%s  +--------------------------------------+%s\n\n' "$INFO" "$RESET"
+}
 
 set -euo pipefail
 
@@ -70,6 +87,7 @@ Nach der Erstinstallation:
 EOF
 }
 
+
 case "${1:-}" in
   -h|--help|-help)
     show_help
@@ -83,14 +101,14 @@ if [ "${1:-}" = "update" ]; then
     exit 1
   fi
 
-  echo "==> Repository aktualisieren"
+  print_step "Repository aktualisieren"
   git -C "${REPO_DIR}" pull --ff-only
 
-  echo "==> Container neu bauen und starten"
+  print_step "Container neu bauen und starten"
   docker compose -f "${REPO_DIR}/docker-compose.yml" up -d --build
 
   echo
-  echo "Update abgeschlossen. Die Ordner data/db, data/logs und data/videos wurden nicht verändert."
+  print_success "Update abgeschlossen. Die Ordner data/db, data/logs und data/videos wurden nicht verändert."
   exit 0
 fi
 
@@ -100,17 +118,17 @@ if [ "${1:-}" = "reset" ]; then
     exit 1
   fi
 
-  echo "ACHTUNG: Die Datenbank, alle Logs und alle Videos werden dauerhaft gelöscht."
+  print_warning "ACHTUNG: Datenbank, Logs und Videos werden dauerhaft gelöscht."
   read -r -p 'Zum Bestätigen exakt RESET eingeben: ' RESET_CONFIRMATION
   if [ "${RESET_CONFIRMATION}" != "RESET" ]; then
-    echo "Reset abgebrochen."
+    print_error "Reset abgebrochen."
     exit 1
   fi
 
-  echo "==> Laufende Twitch-Streamer-Container stoppen"
+  print_step "Laufende Twitch-Streamer-Container stoppen"
   docker stop twitch-streamer-backend twitch-streamer-frontend >/dev/null 2>&1 || true
 
-  echo "==> Persistente Daten löschen"
+  print_step "Persistente Daten löschen"
   rm -rf -- \
     "${REPO_DIR}/data/db" \
     "${REPO_DIR}/data/logs" \
@@ -120,10 +138,10 @@ if [ "${1:-}" = "reset" ]; then
     "${REPO_DIR}/data/logs" \
     "${REPO_DIR}/data/videos"
 
-  echo "==> Twitch-Streamer-Container neu starten"
+  print_step "Twitch-Streamer-Container neu starten"
   docker start twitch-streamer-backend twitch-streamer-frontend >/dev/null 2>&1 || true
 
-  echo "Reset abgeschlossen. Datenbank, Logs und Videos sind leer."
+  print_success "Reset abgeschlossen. Datenbank, Logs und Videos sind leer."
   exit 0
 fi
 
@@ -132,23 +150,25 @@ DUCKDNS_TOKEN="${2:-}"
 SUBDOMAIN="${DOMAIN%%.duckdns.org}"
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Bitte mit sudo/als root ausführen." >&2
+  print_error "Bitte mit sudo/als root ausführen."
   exit 1
 fi
 
-echo "==> Pakete installieren (nginx, certbot, curl)"
+print_install_logo
+print_step "Installation für ${DOMAIN}"
+print_step "Pakete installieren (nginx, certbot, curl)"
 apt-get update
 apt-get install -y ca-certificates curl nginx certbot python3-certbot-nginx
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "==> Docker installieren"
+  print_step "Docker installieren"
   curl -fsSL https://get.docker.com | sh
 else
-  echo "==> Docker bereits installiert"
+  print_step "Docker bereits installiert"
 fi
 
 if [ -n "$DUCKDNS_TOKEN" ]; then
-  echo "==> DuckDNS: IP jetzt setzen + Cron-Update alle 5 Minuten"
+  print_step "DuckDNS: IP setzen und Cron-Update alle 5 Minuten einrichten"
   UPDATE_URL="https://www.duckdns.org/update?domains=${SUBDOMAIN}&token=${DUCKDNS_TOKEN}&ip="
   curl -fsS "$UPDATE_URL" && echo
   cat > /etc/cron.d/duckdns <<EOF
@@ -156,10 +176,10 @@ if [ -n "$DUCKDNS_TOKEN" ]; then
 EOF
   chmod 644 /etc/cron.d/duckdns
 else
-  echo "==> Kein DuckDNS-Token übergeben — DNS-Update übersprungen (Domain muss bereits auf diese VPS zeigen)."
+  print_warning "Kein DuckDNS-Token übergeben. DNS-Update übersprungen; die Domain muss bereits auf diese VPS zeigen."
 fi
 
-echo "==> nginx-Konfiguration für ${DOMAIN} einrichten"
+print_step "nginx-Konfiguration für ${DOMAIN} einrichten"
 sed "s/__DOMAIN__/${DOMAIN}/g" "${REPO_DIR}/deploy/nginx-twitch-streamer.conf" \
   > /etc/nginx/sites-available/twitch-streamer.conf
 ln -sf /etc/nginx/sites-available/twitch-streamer.conf /etc/nginx/sites-enabled/twitch-streamer.conf
@@ -168,13 +188,13 @@ nginx -t
 systemctl reload nginx
 
 if command -v ufw >/dev/null 2>&1; then
-  echo "==> Firewall: SSH + HTTP/HTTPS freigeben"
+  print_step "Firewall: SSH und HTTP/HTTPS freigeben"
   ufw allow OpenSSH >/dev/null || true
   ufw allow 'Nginx Full' >/dev/null || true
 fi
 
 echo
-echo "Fertig. Nächste Schritte (siehe README):"
-echo "  1. cp .env.example .env   und Werte eintragen"
-echo "  2. docker compose up -d --build"
-echo "  3. certbot --nginx -d ${DOMAIN}   (HTTPS aktivieren)"
+print_success "Installation abgeschlossen. Nächste Schritte:"
+printf '  %s1.%s cp .env.example .env   und Werte eintragen\n' "$ACCENT" "$RESET"
+printf '  %s2.%s docker compose up -d --build\n' "$ACCENT" "$RESET"
+printf '  %s3.%s certbot --nginx -d %s   (HTTPS aktivieren)\n' "$ACCENT" "$RESET" "$DOMAIN"
