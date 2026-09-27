@@ -8,11 +8,13 @@ import Button from '../components/Button';
 import { Select } from '../components/FormControls';
 import Checkbox from '../components/Checkbox';
 
-const SOURCE_LABELS = {
-  all: 'Alle',
-  uploads_only: 'Nur Uploads',
-  vods_only: 'Nur VODs',
-};
+// const SOURCE_LABELS = {
+//   all: 'Alle',
+//   uploads_only: 'Nur Uploads',
+//   vods_only: 'Nur VODs',
+// };
+
+const PRIVILEGED_ROLES = ['admin', 'broadcaster'];
 
 const pulse = keyframes`
   0%, 50% { box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.45); }
@@ -145,24 +147,46 @@ const StreamHeroPanel = ({
         </ModeToggle>
         */}
 
-        <LoopToggle>
-          <Checkbox
-            checked={!!settings.loopPlaylist}
-            disabled={status.running}
-            onChange={async (e) => {
-              const loopPlaylist = e.target.checked;
-              setSettings((s) => ({ ...s, loopPlaylist }));
-              try {
-                await api.saveSettings({ loopPlaylist });
-              } catch (err) {
-                setMessage({ type: 'error', text: err.message });
-              }
-            }}
-            label={'Playlist Loop aktivieren'}
-          />
-        </LoopToggle>
-
-        {status.running ? (
+        {PRIVILEGED_ROLES.includes(userRole) ? (
+          <>
+            <LoopToggle>
+              <Checkbox
+                checked={!!settings.loopPlaylist}
+                disabled={status.running}
+                onChange={async (e) => {
+                  const loopPlaylist = e.target.checked;
+                  setSettings((s) => ({ ...s, loopPlaylist }));
+                  try {
+                    await api.saveSettings({ loopPlaylist });
+                  } catch (err) {
+                    setMessage({ type: 'error', text: err.message });
+                  }
+                }}
+                label={'Playlist Loop aktivieren'}
+              />
+            </LoopToggle>
+            {status.running ? (
+              <Button variant="stop" onClick={handleStop} disabled={busy}>
+                <span className="material-symbols-outlined">stop_circle</span>
+              </Button>
+            ) : (
+              <Button
+                variant="start"
+                title="Stream Starten"
+                onClick={handleStart}
+                disabled={
+                  busy ||
+                  readyPlaylist.length === 0 ||
+                  (['broadcaster', 'admin'].includes(userRole) &&
+                    !settings.streamKey)
+                }
+              >
+                <span className="material-symbols-outlined">play_circle</span>
+              </Button>
+            )}
+          </>
+        ) : null}
+        {/* {status.running ? (
           <Button variant="stop" onClick={handleStop} disabled={busy}>
             <span className="material-symbols-outlined">stop_circle</span>
           </Button>
@@ -180,7 +204,7 @@ const StreamHeroPanel = ({
           >
             <span className="material-symbols-outlined">play_circle</span>
           </Button>
-        )}
+        )} */}
       </HeroControls>
 
       {status.log && status.log.length > 0 && (

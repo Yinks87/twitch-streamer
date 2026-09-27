@@ -32,6 +32,8 @@ const VOD_STATUS_LABEL = {
   error: '✗',
 };
 
+const PRIVILEGED_ROLES = ['admin', 'broadcaster'];
+
 function formatUptime(startedAt) {
   if (!startedAt) return '00:00:00';
   const seconds = Math.max(
@@ -172,7 +174,9 @@ function PlayerPageContent() {
   useEffect(() => {
     Promise.all([
       loadMe().catch(() => navigate('/', { replace: true })),
-      loadSettings().catch((e) => setMessage({ type: 'error', text: e.message })),
+      loadSettings().catch((e) =>
+        setMessage({ type: 'error', text: e.message }),
+      ),
       loadVideos().catch((e) => setMessage({ type: 'error', text: e.message })),
       loadPlaylist().catch(() => {}),
     ]).finally(() => setPageLoading(false));
@@ -399,14 +403,16 @@ function PlayerPageContent() {
               </Button>
             </div>
           )}
-          <Button
-            as={Link}
-            to="/settings"
-            variant="ghost"
-            style={{ fontSize: '0.8rem' }}
-          >
-            Einstellungen
-          </Button>
+          {PRIVILEGED_ROLES.includes(user.role) && (
+            <Button
+              as={Link}
+              to="/settings"
+              variant="ghost"
+              style={{ fontSize: '0.8rem' }}
+            >
+              Einstellungen
+            </Button>
+          )}
         </div>
       </ConsoleHeader>
 
