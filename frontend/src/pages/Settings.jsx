@@ -13,6 +13,8 @@ import {
 } from '../components/ConsoleLayout';
 import LogsPanel from '../panels/LogsPanel';
 import TwitchMessagesPanel from '../panels/TwitchMessagesPanel';
+import { isDirtyCheck } from '../utils/isDirtyCheck';
+import PageLoading from '../components/PageLoading';
 
 const INGEST_PRESETS = [
   { label: 'Automatisch (live.twitch.tv)', value: 'rtmp://live.twitch.tv/app' },
@@ -23,10 +25,33 @@ const INGEST_PRESETS = [
   { label: 'Benutzerdefiniert', value: 'custom' },
 ];
 
+function getDestinationSettings(settings, twitchServer) {
+  return {
+    twitchServer,
+    streamKey: settings.streamKey,
+    videoBitrateKbps: settings.videoBitrateKbps,
+    audioBitrateKbps: settings.audioBitrateKbps,
+    streamFps: settings.streamFps,
+    restartIntervalSeconds: settings.restartIntervalSeconds,
+    restartDelaySeconds: settings.restartDelaySeconds,
+  };
+}
+
+function getTwitchMessageSettings(settings) {
+  return {
+    chatMessagesEnabled: settings.chatMessagesEnabled,
+    chatMessages: {
+      currentVideo: settings.chatMessages?.currentVideo ?? '',
+      restartMessage: settings.chatMessages?.restartMessage ?? '',
+    },
+  };
+}
+
 // ── Settings page (/settings) — Sendeziel & Benutzerverwaltung ────────────────
 export default function Settings() {
   const navigate = useNavigate();
   const [user, setUser] = useState(undefined); // undefined = loading, null = not logged in
+  const [pageLoading, setPageLoading] = useState(true);
 
   const [settings, setSettings] = useState({
     twitchServer: '',
@@ -38,7 +63,14 @@ export default function Settings() {
     streamFps: 60,
     restartIntervalSeconds: 169200,
     restartDelaySeconds: 5,
+    chatMessagesEnabled: true,
+    chatMessages: {
+      currentVideo:
+        'Aktueller Titel: "${title}" in der Kategorie: "${category}"',
+      restartMessage: 'Stream wird in ${duration}s neu gestartet',
+    },
   });
+  const [initialSettings, setInitialSettings] = useState(null);
   const [ingestChoice, setIngestChoice] = useState('rtmp://live.twitch.tv/app');
   const [customServer, setCustomServer] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -57,20 +89,36 @@ export default function Settings() {
   const loadSettings = useCallback(async () => {
     const data = await api.getSettings();
     setSettings(data);
+    setInitialSettings(data);
     const known = INGEST_PRESETS.find((p) => p.value === data.twitchServer);
     setIngestChoice(known ? known.value : 'custom');
     if (!known) setCustomServer(data.twitchServer);
   }, []);
 
   useEffect(() => {
-    loadMe().catch(() => navigate('/', { replace: true }));
-    loadSettings().catch((e) => setMessage({ type: 'error', text: e.message }));
+    Promise.all([
+      loadMe().catch(() => navigate('/', { replace: true })),
+      loadSettings().catch((e) => setMessage({ type: 'error', text: e.message })),
+    ]).finally(() => setPageLoading(false));
   }, [loadMe, loadSettings, navigate]);
 
+  if (pageLoading) return <PageLoading page="Einstellungsseite" />;
   if (!user) return null;
 
   const effectiveServer =
     ingestChoice === 'custom' ? customServer : ingestChoice;
+  const isDestinationDirty =
+    initialSettings !== null &&
+    isDirtyCheck(
+      getDestinationSettings(settings, effectiveServer),
+      getDestinationSettings(initialSettings, initialSettings.twitchServer),
+    );
+  const isTwitchMessagesDirty =
+    initialSettings !== null &&
+    isDirtyCheck(
+      getTwitchMessageSettings(settings),
+      getTwitchMessageSettings(initialSettings),
+    );
 
   async function handleSaveSettings(e) {
     e.preventDefault();
@@ -86,11 +134,17 @@ export default function Settings() {
         streamFps: Number(settings.streamFps),
         restartIntervalSeconds: Number(settings.restartIntervalSeconds),
         restartDelaySeconds: Number(settings.restartDelaySeconds),
+        chatMessagesEnabled: settings.chatMessagesEnabled,
+        chatMessages: {
+          currentVideo: settings.chatMessages.currentVideo,
+          restartMessage: settings.chatMessages.restartMessage,
+        },
       };
       if (user.role === 'broadcaster' || user.role === 'admin')
         payload.streamKey = settings.streamKey;
       const saved = await api.saveSettings(payload);
       setSettings(saved);
+      setInitialSettings(saved);
       setMessage({ type: 'info', text: 'Einstellungen gespeichert.' });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
@@ -142,6 +196,7 @@ export default function Settings() {
           showKey={showKey}
           setShowKey={setShowKey}
           savingSettings={savingSettings}
+          isDirty={isDestinationDirty}
           onSave={handleSaveSettings}
         />
 
@@ -149,10 +204,19 @@ export default function Settings() {
           <UserManagementPanelFile setMessage={setMessage} />
         )}
         {(user.role === 'broadcaster' || user.role === 'admin') && (
-          <TwitchMessagesPanel />
+          <TwitchMessagesPanel
+            settings={settings}
+            setSettings={setSettings}
+            onSave={handleSaveSettings}
+            isDirty={isTwitchMessagesDirty}
+            savingSettings={savingSettings}
+          />
         )}
         {/* ── Stream logs (admin only) ─────────────────────────────────────────── */}
-        <LogsPanel userRole={user.role} setMessage={setMessage} />
+        <LogsPanel
+          userRole={user.role}
+          setMessage={setMessage}
+        />
       </ConsoleGrid>
     </Console>
   );

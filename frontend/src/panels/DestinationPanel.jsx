@@ -16,6 +16,7 @@ export default function DestinationPanel({
   showKey,
   setShowKey,
   savingSettings,
+  isDirty,
   onSave,
 }) {
   return (
@@ -157,7 +158,11 @@ export default function DestinationPanel({
             />
           </Field>
         </RestartRow>
-        <Button variant="primary" type="submit" disabled={savingSettings}>
+        <Button
+          variant="primary"
+          type="submit"
+          disabled={savingSettings || !isDirty}
+        >
           {savingSettings ? 'Speichert…' : 'Speichern'}
         </Button>
       </Form>

@@ -18,12 +18,12 @@ const migrations = [
           alt_streamer    TEXT    NOT NULL DEFAULT '',
           loop_playlist   INTEGER NOT NULL DEFAULT 1,
           chat_messages_enabled   INTEGER NOT NULL DEFAULT 1,
-          chat_messages           TEXT NOT NULL DEFAULT '{}',
+          chat_messages           TEXT NOT NULL DEFAULT '{"currentVideo":"Aktueller Titel: \\"\${title}\\" in der Kategorie: \\"\${category}\\"","restartMessage":"Stream wird in \${duration}s neu gestartet"}',
           video_bitrate_kbps INTEGER NOT NULL DEFAULT 6000,
           audio_bitrate_kbps INTEGER NOT NULL DEFAULT 128,
           stream_fps      INTEGER NOT NULL DEFAULT 60,
           restart_interval_seconds INTEGER NOT NULL DEFAULT 169200,
-          restart_delay_seconds INTEGER NOT NULL DEFAULT 5,
+          restart_delay_seconds INTEGER NOT NULL DEFAULT 30,
           updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
         );
       
@@ -87,7 +87,7 @@ const migrations = [
         );
       if (!settingColumns.includes('restart_delay_seconds'))
         db.exec(
-          'ALTER TABLE settings ADD COLUMN restart_delay_seconds INTEGER NOT NULL DEFAULT 5',
+          'ALTER TABLE settings ADD COLUMN restart_delay_seconds INTEGER NOT NULL DEFAULT 30',
         );
       if (!settingColumns.includes('chat_messages_enabled'))
         db.exec(

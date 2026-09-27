@@ -1,57 +1,16 @@
-import React, { useState } from 'react';
 import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import { Input } from '../components/FormControls';
 import Checkbox from '../components/Checkbox';
-import { useEffect } from 'react';
-import { api } from '../api';
 import Button from '../components/Button';
 
-const defaultMessages = {
-  currentVideo: 'Aktueller Titel: "${title}" in der Kategorie: "${category}"',
-  restartMessage: 'Stream wird in ${duration}s neu gestartet',
-};
-
-const TwitchMessagesPanel = () => {
-  const [settings, setSettings] = useState({});
-  const [messages, setMessages] = useState(defaultMessages);
-
-  useEffect(() => {
-    const fetchSettings = async () => {
-      const storedSettings = await api.getSettings();
-      setSettings(storedSettings);
-      setMessages({
-        chatMessagesEnabled: storedSettings?.chatMessagesEnabled || true,
-        currentVideo:
-          storedSettings?.chatMessages?.currentVideo ||
-          defaultMessages.currentVideo,
-        restartMessage:
-          storedSettings?.chatMessages?.restartMessage ||
-          defaultMessages.restartMessage,
-      });
-    };
-    fetchSettings();
-  }, []);
-
-  const onSave = async (e) => {
-    e.preventDefault();
-    setSettings({
-      ...settings,
-      chatMessages: {
-        currentVideo: messages.currentVideo,
-        restartMessage: messages.restartMessage,
-      },
-    });
-
-    await api.saveSettings({
-      ...settings,
-      chatMessages: {
-        currentVideo: messages.currentVideo,
-        restartMessage: messages.restartMessage,
-      },
-    });
-  };
-
+const TwitchMessagesPanel = ({
+  settings,
+  setSettings,
+  onSave,
+  isDirty,
+  savingSettings,
+}) => {
   return (
     <CollapsiblePanel storageKey="twitchMessages" title="Twitch Nachrichten">
       <Form onSubmit={onSave}>
@@ -74,9 +33,15 @@ const TwitchMessagesPanel = () => {
         </Hint>
         <Input
           label="Aktuelles Video"
-          value={messages.currentVideo}
+          value={settings?.chatMessages?.currentVideo || ''}
           onChange={(e) =>
-            setMessages({ ...messages, currentVideo: e.target.value })
+            setSettings({
+              ...settings,
+              chatMessages: {
+                ...settings.chatMessages,
+                currentVideo: e.target.value,
+              },
+            })
           }
         />
         <Hint>
@@ -84,13 +49,23 @@ const TwitchMessagesPanel = () => {
         </Hint>
         <Input
           label="Neustart Nachricht"
-          value={messages.restartMessage}
+          value={settings?.chatMessages?.restartMessage || ''}
           onChange={(e) =>
-            setMessages({ ...messages, restartMessage: e.target.value })
+            setSettings({
+              ...settings,
+              chatMessages: {
+                ...settings.chatMessages,
+                restartMessage: e.target.value,
+              },
+            })
           }
         />
-        <Button variant="primary" type="submit">
-          Speichern
+        <Button
+          variant="primary"
+          type="submit"
+          disabled={savingSettings || !isDirty}
+        >
+          {savingSettings ? 'Speichert…' : 'Speichern'}
         </Button>
       </Form>
     </CollapsiblePanel>

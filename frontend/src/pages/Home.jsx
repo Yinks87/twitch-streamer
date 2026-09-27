@@ -17,6 +17,7 @@ import {
   ConsoleClock,
   ConsoleGrid,
 } from '../components/ConsoleLayout';
+import PageLoading from '../components/PageLoading';
 
 // ── Player page (/app) ────────────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ function StopGuardButton({ onClick, children, title }) {
 function PlayerPageContent() {
   const navigate = useNavigate();
   const [user, setUser] = useState(undefined); // undefined = loading, null = not logged in
+  const [pageLoading, setPageLoading] = useState(true);
 
   const [settings, setSettings] = useState({
     twitchServer: '',
@@ -168,10 +170,12 @@ function PlayerPageContent() {
   );
 
   useEffect(() => {
-    loadMe().catch(() => navigate('/', { replace: true }));
-    loadSettings().catch((e) => setMessage({ type: 'error', text: e.message }));
-    loadVideos().catch((e) => setMessage({ type: 'error', text: e.message }));
-    loadPlaylist().catch(() => {});
+    Promise.all([
+      loadMe().catch(() => navigate('/', { replace: true })),
+      loadSettings().catch((e) => setMessage({ type: 'error', text: e.message })),
+      loadVideos().catch((e) => setMessage({ type: 'error', text: e.message })),
+      loadPlaylist().catch(() => {}),
+    ]).finally(() => setPageLoading(false));
   }, [loadMe, loadSettings, loadVideos, loadPlaylist, navigate]);
 
   useEffect(() => {
@@ -200,6 +204,7 @@ function PlayerPageContent() {
     return () => clearInterval(id);
   }, [playlist, loadPlaylist, loadVods, user]);
 
+  if (pageLoading) return <PageLoading page="Player" />;
   if (!user) return null;
 
   async function handleFiles(fileList) {

@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import Button from '../components/Button';
 import Banner from '../components/Banner';
 import { Eyebrow } from '../components/ConsoleLayout';
+import PageLoading from '../components/PageLoading';
 
 // ── Login page (/) ────────────────────────────────────────────────────────────
 export default function Login() {
@@ -27,7 +28,7 @@ export default function Login() {
       .catch(() => setChecking(false));
   }, [navigate]);
 
-  if (checking) return null;
+  if (checking) return <PageLoading page="Login-Seite" />;
 
   return (
     <div
