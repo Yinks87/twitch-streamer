@@ -105,26 +105,6 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
     const twitchUser = userRes.data?.data?.[0];
     if (!twitchUser) throw new Error('Failed to fetch Twitch user info');
 
-    if (db.getUserCount() === 0) {
-      const permitted = String(TWITCH_PERMITTED_USER || '')
-        .trim()
-        .toLowerCase();
-      const matchesPermittedUser =
-        permitted &&
-        [twitchUser.id, twitchUser.login, twitchUser.display_name].some(
-          (value) =>
-            String(value || '')
-              .trim()
-              .toLowerCase() === permitted,
-        );
-      if (!matchesPermittedUser) {
-        throw new Error(
-          'Only the configured TWITCH_PERMITTED_USER may perform the first login.',
-        );
-      }
-    }
-
-    const existingUser = db.getUserByTwitchId(twitchUser.id);
     const permitted = String(TWITCH_PERMITTED_USER || '')
       .trim()
       .toLowerCase();
@@ -136,7 +116,17 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
             .trim()
             .toLowerCase() === permitted,
       );
-    const knownRoles = ['broadcaster', 'admin', 'manager'];
+
+    if (db.getUserCount() === 0) {
+      if (!isPermittedUser) {
+        throw new Error(
+          'Only the configured TWITCH_PERMITTED_USER may perform the first login.',
+        );
+      }
+    }
+
+    const existingUser = db.getUserByTwitchId(twitchUser.id);
+    const knownRoles = ['admin', 'manager'];
     if (!knownRoles.includes(existingUser?.role) && !isPermittedUser) {
       throw new Error(
         'This Twitch user is not authorized to use the application.',
@@ -144,7 +134,21 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
     }
     const role = isPermittedUser
       ? 'broadcaster'
-      : existingUser?.role || 'manager';
+      : existingUser.role;
+
+    if (!existingUser) {
+      db.upsertUser({
+        twitchUserId: twitchUser.id,
+        login: twitchUser.login,
+        displayName: twitchUser.display_name,
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        tokenExpiresAt,
+        broadcasterType: twitchUser.broadcaster_type,
+        profileImageUrl: twitchUser.profile_image_url,
+        role,
+      });
+    }
 
     // Auto-save stream key to settings
     if (role === 'broadcaster') {
