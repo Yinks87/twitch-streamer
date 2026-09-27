@@ -88,6 +88,9 @@ if [ "${1:-}" = "reset" ]; then
     "${REPO_DIR}/data/logs" \
     "${REPO_DIR}/data/videos"
 
+  echo "==> Twitch-Streamer-Container neu starten"
+  docker start twitch-streamer-backend twitch-streamer-frontend >/dev/null 2>&1 || true
+
   echo "Reset abgeschlossen. Datenbank, Logs und Videos sind leer."
   exit 0
 fi
