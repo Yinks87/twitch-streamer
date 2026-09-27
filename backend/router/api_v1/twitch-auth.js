@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import config from '../../config.js';
 import * as db from '../../db/db.js';
 import { getSessionToken } from '../../middleware/index.js';
+import { authAPI, getStreamKey, twitchAPI } from '../../twitch/api.js';
 const twitchAuthRouter = express.Router();
 
 const {
@@ -47,15 +48,17 @@ twitchAuthRouter.get('/twitch', (req, res) => {
       .json({ error: 'Twitch OAuth not configured (set TWITCH_CLIENT_ID)' });
   }
   const state = createOAuthState();
+
+  const qs = new URLSearchParams({
+    client_id: TWITCH_CLIENT_ID,
+    redirect_uri: TWITCH_REDIRECT_URI,
+    response_type: 'code',
+    scope:
+      'channel:read:stream_key user:read:broadcast channel:manage:broadcast user:write:chat',
+    state: state,
+  });
   const url = new URL('https://id.twitch.tv/oauth2/authorize');
-  url.searchParams.set('client_id', TWITCH_CLIENT_ID);
-  url.searchParams.set('redirect_uri', TWITCH_REDIRECT_URI);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set(
-    'scope',
-    'channel:read:stream_key user:read:broadcast channel:manage:broadcast user:write:chat',
-  );
-  url.searchParams.set('state', state);
+  url.search = qs.toString();
   res.redirect(url.toString());
 });
 
@@ -73,19 +76,18 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
 
   try {
     // Exchange code for tokens
-    const tokenRes = await fetch('https://id.twitch.tv/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: TWITCH_CLIENT_ID,
-        client_secret: TWITCH_CLIENT_SECRET,
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: TWITCH_REDIRECT_URI,
-      }),
+
+    const qs = new URLSearchParams({
+      client_id: TWITCH_CLIENT_ID,
+      client_secret: TWITCH_CLIENT_SECRET,
+      code,
+      grant_type: 'authorization_code',
+      redirect_uri: TWITCH_REDIRECT_URI,
     });
-    const tokens = await tokenRes.json();
-    if (!tokenRes.ok)
+
+    const tokenRes = await authAPI.post('/token', qs);
+    const tokens = tokenRes.data;
+    if (!tokenRes.status || tokenRes.status !== 200)
       throw new Error(tokens.message || 'Token exchange failed');
 
     const { access_token, refresh_token, expires_in } = tokens;
@@ -94,15 +96,14 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
     ).toISOString();
 
     // Fetch Twitch user info
-    const userRes = await fetch('https://api.twitch.tv/helix/users', {
+    const userRes = await twitchAPI.get('/users', {
       headers: {
         Authorization: `Bearer ${access_token}`,
         'Client-Id': TWITCH_CLIENT_ID,
       },
     });
-    const userData = await userRes.json();
-    if (!userRes.ok) throw new Error('Failed to fetch Twitch user info');
-    const twitchUser = userData.data[0];
+    const twitchUser = userRes.data?.data?.[0];
+    if (!twitchUser) throw new Error('Failed to fetch Twitch user info');
 
     if (db.getUserCount() === 0) {
       const permitted = String(TWITCH_PERMITTED_USER || '')
@@ -147,19 +148,8 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
 
     // Auto-save stream key to settings
     if (role === 'broadcaster') {
-      const keyRes = await fetch(
-        `https://api.twitch.tv/helix/streams/key?broadcaster_id=${twitchUser.id}`,
-        {
-          headers: {
-            Authorization: `Bearer ${access_token}`,
-            'Client-Id': TWITCH_CLIENT_ID,
-          },
-        },
-      );
-      const keyData = await keyRes.json();
-      if (keyRes.ok && keyData.data?.[0]?.stream_key) {
-        db.saveSettings({ streamKey: keyData.data[0].stream_key });
-      }
+      const streamKey = await getStreamKey();
+      db.saveSettings({ streamKey });
     }
 
     // Persist user and create session
@@ -180,7 +170,7 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
     setSessionCookie(res, sessionToken);
     res.redirect(successUrl);
   } catch (err) {
-    console.error('OAuth callback error:', err);
+    // console.error('OAuth callback error:', err);
     res.redirect(`${errorUrl}?error=${encodeURIComponent(err.message)}`);
   }
 });

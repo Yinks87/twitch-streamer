@@ -126,6 +126,7 @@ const StreamHeroPanel = ({
       </HeroStateWrapper>
 
       <HeroControls>
+        {/*
         <ModeToggle>
           <span>Quelle</span>
           <Select
@@ -142,6 +143,7 @@ const StreamHeroPanel = ({
             ))}
           </Select>
         </ModeToggle>
+        */}
 
         <LoopToggle>
           <Checkbox
@@ -225,7 +227,7 @@ const HeroBody = styled.div`
   width: 100%;
   display: flex;
   flex-direction: column;
-  margin:auto;
+  margin: auto;
 `;
 
 const HeroState = styled.p`

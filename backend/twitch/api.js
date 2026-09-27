@@ -303,8 +303,26 @@ export async function getBroadcasterData() {
       );
       const userData = userResponse.data?.data[0];
 
+      if (!userData) throw new Error('Twitch user lookup failed');
+      return { user: userData, streamKey: await getStreamKey() };
+    } catch (error) {
+      console.error('Error fetching broadcaster data from Twitch API:', error);
+      throw new Error(
+        `Failed to fetch broadcaster data: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+      );
+    }
+  });
+}
+
+
+export async function getStreamKey() {
+  const broadcaster = db.getBroadcasterUser();
+  if (!broadcaster?.access_token) throw new Error(STREAMER_DATA_ERROR);
+
+  return validateAndProceed(broadcaster.access_token, async (validToken) => {
+    try {
       const keyResponse = await twitchAPI.get(
-        `/streams/key?broadcaster_id=${userData.id}`,
+        `/streams/key?broadcaster_id=${broadcaster.twitch_user_id}`,
         {
           headers: {
             'Client-ID': TWITCH_CLIENT_ID,
@@ -314,14 +332,12 @@ export async function getBroadcasterData() {
       );
       const keyData = keyResponse.data?.data[0];
       const streamKey = keyData?.stream_key;
-
-      if (!userData) throw new Error('Twitch user lookup failed');
       if (!streamKey) throw new Error('Twitch stream key lookup failed');
-      return { user: userData, streamKey };
+      return streamKey;
     } catch (error) {
-      console.error('Error fetching broadcaster data from Twitch API:', error);
+      console.error('Error fetching stream key from Twitch API:', error);
       throw new Error(
-        `Failed to fetch broadcaster data: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+        `Failed to fetch stream key: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
       );
     }
   });
