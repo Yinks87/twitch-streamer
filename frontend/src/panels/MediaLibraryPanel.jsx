@@ -43,6 +43,10 @@ function MediaLibraryItem({
     () => normalizeTranscript(video.transcript || {}).timestamps,
   );
   const [saving, setSaving] = useState(false);
+  const initialTimestamps = normalizeTranscript(
+    video.transcript || {},
+  ).timestamps;
+  const isDirty = JSON.stringify(timestamps) !== JSON.stringify(initialTimestamps);
   const videoRef = useRef(null);
   const transcriptSignature = JSON.stringify(video.transcript || {});
   const needsCategory = videoNeedsCategory(video.transcript);
@@ -104,6 +108,8 @@ function MediaLibraryItem({
         <VideoListName style={{ minWidth: 0 }}>
           {video.transcript?.timestamps?.[0]?.title || video.name}
         </VideoListName>
+        {needsCategory && <Warning>Transkript unvollständig</Warning>}
+
         <ToggleIcon aria-hidden="true">
           <span
             style={{
@@ -127,7 +133,6 @@ function MediaLibraryItem({
                   : 'In der Playlist deaktiviert'
                 : 'Nicht in der Playlist'}
             </span>
-            {needsCategory && <Warning>Kategorie fehlt</Warning>}
           </ItemMeta>
           <Preview
             ref={videoRef}
@@ -166,7 +171,7 @@ function MediaLibraryItem({
               type="button"
               variant="primary"
               onClick={saveTranscript}
-              disabled={saving}
+              disabled={saving || !isDirty}
             >
               <span className="material-symbols-outlined small">save</span>
             </Button>
