@@ -67,6 +67,9 @@ Verwendung:
       Erstinstallation: installiert Docker, nginx und certbot und richtet
       die DuckDNS-Domain sowie den Host-Reverse-Proxy ein.
 
+  sudo ./deploy/install.sh restart
+      Startet die Twitch-Streamer-Container neu.
+
   sudo ./deploy/install.sh update
       Holt den neuesten Repository-Stand und baut die Container neu.
       data/db, data/logs und data/videos bleiben erhalten.
@@ -94,6 +97,19 @@ case "${1:-}" in
     exit 0
     ;;
 esac
+
+if [ "${1:-}" = "restart" ]; then
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "Bitte mit sudo/als root ausführen." >&2
+    exit 1
+  fi
+
+  print_step "Twitch-Streamer-Container neu starten"
+  docker restart twitch-streamer-backend twitch-streamer-frontend >/dev/null 2>&1 || true
+  print_success "Restart abgeschlossen."
+
+fi
+
 
 if [ "${1:-}" = "update" ]; then
   if [ "$(id -u)" -ne 0 ]; then

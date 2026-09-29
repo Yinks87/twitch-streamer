@@ -14,7 +14,6 @@ import {
   Console,
   ConsoleHeader,
   Eyebrow,
-  ConsoleClock,
   ConsoleGrid,
 } from '../components/ConsoleLayout';
 import PageLoading from '../components/PageLoading';
@@ -34,17 +33,6 @@ const VOD_STATUS_LABEL = {
 
 const PRIVILEGED_ROLES = ['admin', 'broadcaster'];
 
-function formatUptime(startedAt) {
-  if (!startedAt) return '00:00:00';
-  const seconds = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000),
-  );
-  const h = String(Math.floor(seconds / 3600)).padStart(2, '0');
-  const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
-  const s = String(seconds % 60).padStart(2, '0');
-  return `${h}:${m}:${s}`;
-}
 
 export default function Home() {
   return (
