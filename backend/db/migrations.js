@@ -63,113 +63,19 @@ const migrations = [
     },
   },
 
-  {
-    version: 2,
-    name: 'add_added_columns',
-    up: (db) => {
-      const settingColumns = db
-        .prepare('PRAGMA table_info(settings)')
-        .all()
-        .map((column) => column.name);
-      if (!settingColumns.includes('video_bitrate_kbps'))
-        db.exec(
-          'ALTER TABLE settings ADD COLUMN video_bitrate_kbps INTEGER NOT NULL DEFAULT 6000',
-        );
-      if (!settingColumns.includes('audio_bitrate_kbps'))
-        db.exec(
-          'ALTER TABLE settings ADD COLUMN audio_bitrate_kbps INTEGER NOT NULL DEFAULT 128',
-        );
-      if (!settingColumns.includes('stream_fps'))
-        db.exec(
-          'ALTER TABLE settings ADD COLUMN stream_fps INTEGER NOT NULL DEFAULT 60',
-        );
-      if (!settingColumns.includes('restart_interval_seconds'))
-        db.exec(
-          'ALTER TABLE settings ADD COLUMN restart_interval_seconds INTEGER NOT NULL DEFAULT 169200',
-        );
-      if (!settingColumns.includes('restart_delay_seconds'))
-        db.exec(
-          'ALTER TABLE settings ADD COLUMN restart_delay_seconds INTEGER NOT NULL DEFAULT 30',
-        );
-      if (!settingColumns.includes('chat_messages_enabled'))
-        db.exec(
-          'ALTER TABLE settings ADD COLUMN chat_messages_enabled INTEGER NOT NULL DEFAULT 1',
-        );
-      if (!settingColumns.includes('chat_messages'))
-        db.exec(
-          "ALTER TABLE settings ADD COLUMN chat_messages TEXT NOT NULL DEFAULT '{}'",
-        );
-      const userColumns = db
-        .prepare('PRAGMA table_info(users)')
-        .all()
-        .map((column) => column.name);
-      if (!userColumns.includes('broadcaster_type'))
-        db.exec('ALTER TABLE users ADD COLUMN broadcaster_type TEXT');
-      if (!userColumns.includes('managers'))
-        db.exec(
-          "ALTER TABLE users ADD COLUMN managers TEXT NOT NULL DEFAULT '[]'",
-        );
-      if (!userColumns.includes('role'))
-        db.exec(
-          "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'manager'",
-        );
-      if (!userColumns.includes('profile_image_url'))
-        db.exec('ALTER TABLE users ADD COLUMN profile_image_url TEXT');
-      const permittedUser = String(config.TWITCH_PERMITTED_USER || '')
-        .trim()
-        .toLowerCase();
-      if (permittedUser) {
-        db.prepare(
-          `
-          UPDATE users
-          SET role = 'broadcaster'
-          WHERE lower(twitch_user_id) = ? OR lower(login) = ? OR lower(display_name) = ?
-        `,
-        ).run(permittedUser, permittedUser, permittedUser);
-      }
-    },
-  },
-  {
-    version: 3,
-    name: 'add_pin_message',
-    up: (db) => {
-      const settingColumns = db
-        .prepare('PRAGMA table_info(settings)')
-        .all()
-        .map((column) => column.name);
-      if (!settingColumns.includes('pin_message_enabled'))
-        db.exec(
-          'ALTER TABLE settings ADD COLUMN pin_message_enabled INTEGER NOT NULL DEFAULT 1',
-        );
-    },
-  },
-  {
-    version: 4,
-    name: 'add_max_storage_gb',
-    up: (db) => {
-      const settingColumns = db
-        .prepare('PRAGMA table_info(settings)')
-        .all()
-        .map((column) => column.name);
-      if (!settingColumns.includes('max_storage_gb'))
-        db.exec(
-          'ALTER TABLE settings ADD COLUMN max_storage_gb INTEGER NOT NULL DEFAULT 100',
-        );
-    },
-  },
-
   // Example of a future migration:
   // {
   //   version: 2,
   //   name: 'release_name',
-  //   up: async (db) => {
-  //     // Safe: only runs on existing DBs that predate the notes column
-  //     await db.exec(
-  //       `ALTER TABLE <TABLE> ADD COLUMN <COLUMNNAME> TEXT NOT NULL DEFAULT '[]'`,
-  //     );
-  //     await db.exec(
-  //       `ALTER TABLE <TABLE> ADD COLUMN <COLUMNNAME> TEXT NOT NULL DEFAULT '[]'`,
-  //     );
+  //   up: (db) => {
+  //     const settingColumns = db
+  //       .prepare('PRAGMA table_info(settings)') // Get the table info for the settings table
+  //       .all()
+  //       .map((column) => column.name);
+  //     if (!settingColumns.includes('max_storage_gb')) // Add the max_storage_gb column if it doesn't exist
+  //       db.exec(
+  //         'ALTER TABLE settings ADD COLUMN max_storage_gb INTEGER NOT NULL DEFAULT 100',
+  //       );
   //   },
   // },
 ];
