@@ -58,6 +58,19 @@ function trackStreamReader(name, stream) {
   stream.once('error', untrack);
 }
 
+// pipe() does not destroy the source when the client aborts. Browsers cancel many
+// range requests while probing large videos, so unclosed read streams would leak
+// file handles until the server stops answering.
+function pipeVideoStream(name, stream, res) {
+  trackStreamReader(name, stream);
+  res.on('close', () => stream.destroy());
+  stream.on('error', () => {
+    if (!res.headersSent) res.status(500).end();
+    else res.destroy();
+  });
+  stream.pipe(res);
+}
+
 function closeActiveStreamReaders(name) {
   const readers = activeStreamReaders.get(name);
   if (!readers) return;
@@ -610,24 +623,30 @@ videosRouter.get('/videos/:name/stream', (req, res) => {
   const range = req.headers.range;
   if (!range) {
     res.writeHead(200, { 'Content-Length': size, 'Content-Type': 'video/mp4' });
-    const stream = fs.createReadStream(filePath);
-    trackStreamReader(name, stream);
-    stream.pipe(res);
+    pipeVideoStream(name, fs.createReadStream(filePath), res);
     return;
   }
 
   const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
-  const start = parseInt(startStr, 10);
-  const end = endStr ? parseInt(endStr, 10) : size - 1;
+  let start = parseInt(startStr, 10);
+  let end = endStr ? parseInt(endStr, 10) : size - 1;
+  if (startStr === '' && Number.isFinite(end)) {
+    // suffix range "bytes=-N": the last N bytes
+    start = Math.max(0, size - end);
+    end = size - 1;
+  }
+  end = Math.min(end, size - 1);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+    res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+    return res.end();
+  }
   res.writeHead(206, {
     'Content-Range': `bytes ${start}-${end}/${size}`,
     'Accept-Ranges': 'bytes',
     'Content-Length': end - start + 1,
     'Content-Type': 'video/mp4',
   });
-  const stream = fs.createReadStream(filePath, { start, end });
-  trackStreamReader(name, stream);
-  stream.pipe(res);
+  pipeVideoStream(name, fs.createReadStream(filePath, { start, end }), res);
 });
 
 videosRouter.get('/thumbnails/:filename', (req, res) => {

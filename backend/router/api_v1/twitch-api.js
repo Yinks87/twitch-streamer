@@ -37,6 +37,60 @@ function removeDownloadArtifacts(filename) {
   }
 }
 
+// Fragmented MP4s (moof boxes, no sidx) can't be probed by browsers without one range
+// request per fragment, so long VODs never finish loading in the <video> preview.
+function isFragmentedMp4(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const header = Buffer.alloc(16);
+    let pos = 0;
+    for (let i = 0; i < 32 && pos + 8 <= size; i++) {
+      fs.readSync(fd, header, 0, 16, pos);
+      let boxSize = header.readUInt32BE(0);
+      const type = header.toString('latin1', 4, 8);
+      if (type === 'moof') return true;
+      if (type === 'mdat') return false;
+      if (boxSize === 1) boxSize = Number(header.readBigUInt64BE(8));
+      else if (boxSize === 0) return false;
+      if (boxSize < 8) return false;
+      pos += boxSize;
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Rewrites a fragmented MP4 (stream copy, no re-encode) as a regular MP4 with the
+// index up front. Shown as the "processing" phase of the download.
+async function makeSeekable(entryId, file) {
+  if (!isFragmentedMp4(file)) return;
+  const tmp = `${file}.faststart.mp4`;
+  const dl = activeDownloads.get(entryId);
+  if (dl) {
+    dl.phase = 'processing';
+    dl.progress = 100;
+    dl.speed = '';
+    dl.eta = '';
+  }
+  console.log(`[ffmpeg] remuxing fragmented MP4: ${file}`);
+  await new Promise((resolve, reject) => {
+    const ff = spawn(
+      FFMPEG_PATH,
+      ['-hide_banner', '-y', '-i', file, '-map', '0', '-c', 'copy', '-movflags', '+faststart', tmp],
+      { stdio: 'ignore' },
+    );
+    if (dl) dl.process = ff; // so aborting the download also stops the remux
+    ff.on('error', reject);
+    ff.on('exit', (code) =>
+      code === 0 ? resolve() : reject(new Error(`ffmpeg remux exit ${code}`)),
+    );
+  });
+  fs.rmSync(file, { force: true });
+  await renameWithRetry(tmp, file);
+}
+
 // Resolves a login name to a Twitch user ID, or falls back to the signed-in user.
 // Returns null if an explicitly requested login name couldn't be found.
 async function resolveBroadcasterId(req, userLogin) {
@@ -257,6 +311,7 @@ async function importRemoteVideo(
     progress: 0,
     speed: '',
     eta: '',
+    phase: 'downloading',
     filename,
     title,
   });
@@ -267,6 +322,18 @@ async function importRemoteVideo(
       .toString()
       .split(/[\r\n]+/)
       .filter(Boolean)) {
+      // After the last fragment yt-dlp merges/remuxes/fixes the streams with ffmpeg
+      // and prints no percentage, so surface it as a separate phase.
+      if (/^\[(Merger|Fixup\w*|VideoRemuxer|VideoConvertor)\]/.test(line)) {
+        const dl = activeDownloads.get(entryId);
+        if (dl) {
+          dl.phase = 'processing';
+          dl.progress = 100;
+          dl.speed = '';
+          dl.eta = '';
+        }
+        continue;
+      }
       const m = line.match(
         /\[download\]\s+([\d.]+)%.*?at\s+(\S+)\s+ETA\s+(\S+)/,
       );
@@ -297,12 +364,16 @@ async function importRemoteVideo(
   });
 
   ytdlp.on('exit', async (code) => {
-    activeDownloads.delete(entryId);
     if (code === 0 && fs.existsSync(stagingPath)) {
       try {
+        await makeSeekable(entryId, stagingPath);
+        if (!activeDownloads.has(entryId)) return; // aborted while processing
+        activeDownloads.delete(entryId);
         await renameWithRetry(stagingPath, outPath);
       } catch (err) {
-        console.error(`[yt-dlp] failed to move finished download: ${err.message}`);
+        if (!activeDownloads.has(entryId)) return;
+        activeDownloads.delete(entryId);
+        console.error(`[yt-dlp] failed to finalize download: ${err.message}`);
         db.updatePlaylistEntry(entryId, { status: 'error' });
         removeDownloadArtifacts(filename);
         return;
@@ -310,6 +381,7 @@ async function importRemoteVideo(
       console.log(`[yt-dlp] ${kind} ${remoteId} downloaded successfully`);
       db.updatePlaylistEntry(entryId, { status: 'ready' });
     } else {
+      activeDownloads.delete(entryId);
       console.error(`[yt-dlp] ${kind} ${remoteId} failed (exit code ${code})`);
       db.updatePlaylistEntry(entryId, { status: 'error' });
       removeDownloadArtifacts(filename);
@@ -366,6 +438,7 @@ twitchApiRouter.get('/downloads', requireAuth, (req, res) => {
       progress: dl.progress,
       speed: dl.speed,
       eta: dl.eta,
+      phase: dl.phase,
       transcript: readTranscript(dl.filename),
     });
   }

@@ -48,12 +48,21 @@ export default function DownloadsPanel({ onAborted }) {
             </Button>
           </DownloadHeader>
           <ProgressTrack>
-            <ProgressFill style={{ width: `${download.progress}%` }} />
+            <ProgressFill
+              $processing={download.phase === 'processing'}
+              style={{ width: `${download.progress}%` }}
+            />
           </ProgressTrack>
           <DownloadMeta>
-            {download.progress.toFixed(1)}%
-            {download.speed ? ` · ${download.speed}` : ''}
-            {download.eta ? ` · ETA ${download.eta}` : ''}
+            {download.phase === 'processing' ? (
+              'Verarbeite Video (Fragmente werden zusammengeführt)…'
+            ) : (
+              <>
+                {download.progress.toFixed(1)}%
+                {download.speed ? ` · ${download.speed}` : ''}
+                {download.eta ? ` · ETA ${download.eta}` : ''}
+              </>
+            )}
           </DownloadMeta>
         </DownloadCard>
       ))}
@@ -91,10 +100,24 @@ const ProgressTrack = styled.div`
   height: 6px;
   overflow: hidden;
 `;
-const ProgressFill = styled.div`
+const ProgressFill = styled('div', {
+  shouldForwardProp: (prop) => prop !== '$processing',
+})`
   height: 100%;
   background: #9147ff;
   transition: width 0.4s;
+  ${(props) =>
+    props.$processing
+      ? `
+    background: linear-gradient(90deg, #9147ff 25%, #b88aff 50%, #9147ff 75%);
+    background-size: 200% 100%;
+    animation: processing-stripes 1.2s linear infinite;
+    @keyframes processing-stripes {
+      from { background-position: 200% 0; }
+      to { background-position: 0 0; }
+    }
+  `
+      : ''}
 `;
 const DownloadMeta = styled.p`
   margin: 0.25rem 0 0;
