@@ -100,6 +100,30 @@ sudo ./deploy/install.sh reset
 Nach der Sicherheitsabfrage werden die Datenbank, alle Logs und alle Videos
 gelöscht. Die leeren Ordner werden anschließend neu angelegt.
 
+## Windows mit Docker Desktop (Port 3050, HTTPS über Caddy)
+
+Alternative zur VPS-Installation: Das Projekt läuft auf einem Windows-PC mit
+Docker Desktop und ist per Portweiterleitung unter
+`https://meloonie24.duckdns.org:3050` erreichbar. Zusätzlich zu `frontend` und
+`backend` startet `docker-compose.windows.yml` einen **Caddy**-Container
+(`caddy/`), der HTTPS terminiert und auf den Frontend-Container proxied. Das
+Zertifikat holt Caddy per DNS-Challenge über die DuckDNS-API — dafür müssen
+Port 80/443 nicht erreichbar sein, nur **TCP 3050**.
+
+1. `.env.windows.example` nach `.env` im Repo-Root kopieren und ausfüllen
+   (Twitch-Daten, `SESSION_SECRET`, `DUCKDNS_TOKEN`). `COMPOSE_FILE` in dieser
+   Datei sorgt dafür, dass `docker-compose.windows.yml` automatisch geladen wird.
+2. In der Twitch-Dev-Console als OAuth Redirect URL eintragen:
+   `https://meloonie24.duckdns.org:3050/api/v1/auth/twitch/callback`
+3. Windows-Firewall (PowerShell als Admin):
+   `New-NetFirewallRule -DisplayName "Twitch Streamer" -Direction Inbound -Protocol TCP -LocalPort 3050 -Action Allow`
+4. Router: TCP 3050 extern → TCP 3050 auf die (feste) LAN-IP des PCs.
+5. Die DuckDNS-Domain muss auf die öffentliche IP zeigen (bei dynamischer IP
+   regelmäßig `https://www.duckdns.org/update?domains=meloonie24&token=<token>&ip=` aufrufen).
+6. Starten: `docker compose up -d --build`
+
+Beim ersten Start holt Caddy das Zertifikat (`docker compose logs -f caddy`).
+
 ## Installation auf der VPS (Ubuntu + DuckDNS + HTTPS)
 
 Zielarchitektur:

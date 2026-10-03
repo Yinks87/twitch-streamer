@@ -1,0 +1,21 @@
+{
+	# Zertifikat per DNS-Challenge: Es müssen keine Ports 80/443 aus dem Internet erreichbar sein.
+	acme_dns duckdns {env.DUCKDNS_TOKEN}
+	# Von außen nur Port 3050 (→ 443 im Container); kein HTTP-Redirect-Listener nötig.
+	auto_https disable_redirects
+}
+
+{$DOMAIN}:443 {
+	# Uploads sind große Videodateien.
+	request_body {
+		max_size 30GB
+	}
+
+	reverse_proxy frontend:80 {
+		flush_interval -1
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+		}
+	}
+}

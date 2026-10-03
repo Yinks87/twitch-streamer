@@ -1,0 +1,30 @@
+# Zusätzlich zu docker-compose.yml für Windows / Docker Desktop (siehe README, Kapitel "Windows").
+# Wird über COMPOSE_FILE in der .env automatisch mitgeladen.
+# Caddy terminiert HTTPS und ist von außen unter https://<DOMAIN>:3050 erreichbar.
+
+services:
+  frontend:
+    # Kein Host-Port mehr (der Host-nginx der VPS entfällt), nur intern für Caddy.
+    ports: !reset []
+    expose:
+      - "80"
+
+  caddy:
+    build: ./caddy
+    container_name: twitch-streamer-caddy
+    restart: unless-stopped
+    depends_on:
+      - frontend
+    environment:
+      - DOMAIN=${DOMAIN:?DOMAIN fehlt in .env, z.B. meloonie24.duckdns.org}
+      - DUCKDNS_TOKEN=${DUCKDNS_TOKEN:?DUCKDNS_TOKEN fehlt in .env}
+    ports:
+      - "3050:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -4,3 +4,5 @@
 data/db/*
 data/logs/*
 data/videos/*
+# Secrets für Docker Compose
+.env

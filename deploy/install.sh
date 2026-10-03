@@ -81,6 +81,11 @@ Verwendung:
       Löscht Datenbank, Logs und Videos nach einer Sicherheitsabfrage.
       Startet die Container nach dem Reset neu und erstellt eine neue leere Datenbank.
 
+  sudo ./deploy/install.sh uninstall
+      Deinstalliert den Twitch-Streamer nach einer Sicherheitsabfrage.
+      Container, Images, Konfiguration, Zertifikat und Laufzeitdaten werden gelöscht.
+      Systemweite Pakete wie Docker, nginx und certbot bleiben installiert.
+
   sudo ./deploy/install.sh -h
   sudo ./deploy/install.sh --help
   sudo ./deploy/install.sh -help
@@ -123,7 +128,7 @@ if [ "${1:-}" = "update" ]; then
     print_error "Bitte mit sudo/als root ausführen."
     exit 1
   fi
-}
+fi
 
 # Fragt einen Wert ab, bis er nicht leer ist.
 # Verwendung: prompt_required VARNAME "Beschreibung" [secret] [default]
@@ -390,6 +395,57 @@ run_reset() {
   print_success "Reset abgeschlossen. Datenbank, Logs und Videos sind leer."
 }
 
+run_uninstall() {
+  require_root
+
+  local nginx_conf="/etc/nginx/sites-available/twitch-streamer.conf"
+  local nginx_link="/etc/nginx/sites-enabled/twitch-streamer.conf"
+  local domain=""
+
+  if [ -f "$nginx_conf" ]; then
+    domain="$(awk '$1 == "server_name" { gsub(/;/, "", $2); print $2; exit }' "$nginx_conf")"
+  fi
+
+  print_warning "ACHTUNG: Twitch-Streamer, DuckDNS-Updater, Domain-Zertifikat und alle Laufzeitdaten werden dauerhaft entfernt."
+  read -r -p 'Zum Bestätigen exakt UNINSTALL eingeben: ' UNINSTALL_CONFIRMATION
+  if [ "${UNINSTALL_CONFIRMATION}" != "UNINSTALL" ]; then
+    print_error "Deinstallation abgebrochen."
+    exit 1
+  fi
+
+  if [ -n "$domain" ] && command -v certbot >/dev/null 2>&1; then
+    print_step "Let's-Encrypt-Zertifikat für ${domain} löschen"
+    certbot delete --cert-name "$domain" --non-interactive
+  elif [ -n "$domain" ]; then
+    print_error "certbot wurde nicht gefunden; Zertifikat kann nicht sicher gelöscht werden. Es wurden noch keine Daten entfernt."
+    exit 1
+  else
+    print_warning "Keine Domain in der nginx-Konfiguration gefunden; Zertifikat wurde nicht gelöscht."
+  fi
+
+  print_step "Twitch-Streamer-Container und -Images entfernen"
+  docker compose -f "${REPO_DIR}/docker-compose.yml" down --rmi local --remove-orphans
+
+  print_step "DuckDNS-Updater entfernen"
+  rm -f /etc/cron.d/duckdns
+
+  print_step "nginx-Site entfernen"
+  rm -f "$nginx_link" "$nginx_conf"
+  if command -v nginx >/dev/null 2>&1; then
+    nginx -t
+    systemctl reload nginx
+  fi
+
+  print_step "Laufzeitdaten und lokale Konfiguration löschen"
+  rm -rf -- \
+    "${REPO_DIR}/data/db" \
+    "${REPO_DIR}/data/logs" \
+    "${REPO_DIR}/data/videos"
+  rm -f "${REPO_DIR}/.env"
+
+  print_success "Deinstallation abgeschlossen. Docker, nginx und certbot bleiben als systemweite Pakete installiert."
+}
+
 case "${1:-}" in
   -h|--help|-help)
     show_help
@@ -403,6 +459,9 @@ case "${1:-}" in
     ;;
   reset)
     run_reset
+    ;;
+  uninstall)
+    run_uninstall
     ;;
   "")
     print_error "Kein Befehl angegeben."
