@@ -29,7 +29,13 @@ function rangesEqual(a, b) {
 // ── Cuts a video directly in the browser's Mediathek: pick ranges on a timeline
 // (including one click for Twitch's reported muted/copyright stretches), then
 // confirm a destructive "original gets replaced" dialog before calling the API. ──
-export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, videoName }) {
+export default function VideoTrimmer({
+  duration,
+  mutedSegments = [],
+  onTrim,
+  onTrimFinished,
+  videoName,
+}) {
   const { showAlert } = useAlert();
   const [cutRanges, setCutRanges] = useState([]);
   const [confirming, setConfirming] = useState(false);
@@ -38,10 +44,40 @@ export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, vid
   const [queued, setQueued] = useState(false);
   const trackRef = useRef(null);
   const dragRef = useRef(null);
-  const pollRef = useRef(null);
+  const savingRef = useRef(false);
+  const wasRunningRef = useRef(false);
+  const onTrimFinishedRef = useRef(onTrimFinished);
+  onTrimFinishedRef.current = onTrimFinished;
 
-  useEffect(() => () => clearInterval(pollRef.current), []);
+  // The server is the source of truth: polling from mount on means a running trim is
+  // still shown after the panel was collapsed, the page reloaded, or another tab started it.
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const data = await api.getTrimProgress(videoName);
+        if (cancelled) return;
+        const running = typeof data.progress === 'number' || Boolean(data.queued);
+        if (typeof data.progress === 'number') setProgress(data.progress);
+        else if (!savingRef.current) setProgress(null);
+        setQueued(Boolean(data.queued));
+        if (wasRunningRef.current && !running && !savingRef.current) {
+          onTrimFinishedRef.current?.();
+        }
+        wasRunningRef.current = running;
+      } catch {
+        // keep showing the last known state if a poll request fails
+      }
+    }
+    poll();
+    const id = setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [videoName]);
 
+  const running = progress != null || queued;
   const hasDuration = Number.isFinite(duration) && duration > 0;
   const mutedRanges = mutedSegments.map(mutedToRange);
   const selectableMutedRanges = mutedRanges.filter(
@@ -138,33 +174,24 @@ export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, vid
     // Close the confirmation dialog right away — the processing indicator below
     // takes over for the (potentially long) ffmpeg re-encode.
     setConfirming(false);
+    savingRef.current = true;
     setSaving(true);
     setProgress(0);
-    pollRef.current = setInterval(async () => {
-      try {
-        const data = await api.getTrimProgress(videoName);
-        if (typeof data.progress === 'number') setProgress(data.progress);
-        setQueued(Boolean(data.queued));
-      } catch {
-        // keep showing the last known percentage if a poll request fails
-      }
-    }, 700);
     try {
       await onTrim(cutRanges);
       setCutRanges([]);
     } catch (err) {
       showAlert({ severity: 'error', message: err.message });
     } finally {
-      clearInterval(pollRef.current);
+      savingRef.current = false;
+      wasRunningRef.current = false;
       setSaving(false);
       setProgress(null);
       setQueued(false);
     }
   }
 
-  if (!hasDuration) return null;
-
-  if (saving) {
+  if (saving || running) {
     const percent = progress != null ? Math.max(0, Math.min(100, progress)) : null;
     return (
       <div
@@ -204,6 +231,8 @@ export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, vid
       </div>
     );
   }
+
+  if (!hasDuration) return null;
 
   return (
     <div style={{ marginTop: '0.75rem' }}>

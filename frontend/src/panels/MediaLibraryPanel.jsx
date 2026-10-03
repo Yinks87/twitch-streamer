@@ -198,6 +198,10 @@ function MediaLibraryItem({
     videoRef.current?.removeAttribute('src');
     videoRef.current?.load();
     await api.trimVideo(video.name, segments);
+    handleTrimFinished();
+  }
+
+  async function handleTrimFinished() {
     // Forces the <video> below to reload the (same-named) file from scratch.
     setReloadToken(Date.now());
     await onRefresh?.();
@@ -301,6 +305,7 @@ function MediaLibraryItem({
             duration={videoDuration}
             mutedSegments={video.transcript?.mutedSegments || []}
             onTrim={handleTrim}
+            onTrimFinished={handleTrimFinished}
             videoName={video.name}
           />
           <TimestampEditor
