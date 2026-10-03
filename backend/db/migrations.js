@@ -18,7 +18,9 @@ const migrations = [
           alt_streamer    TEXT    NOT NULL DEFAULT '',
           loop_playlist   INTEGER NOT NULL DEFAULT 1,
           chat_messages_enabled   INTEGER NOT NULL DEFAULT 1,
-          chat_messages           TEXT NOT NULL DEFAULT '{"currentVideo":"Aktueller Titel: \\"\${title}\\" in der Kategorie: \\"\${category}\\"","restartMessage":"Stream wird in \${duration}s neu gestartet"}',
+          max_storage_gb    INTEGER NOT NULL DEFAULT 500,
+          pin_message_enabled INTEGER NOT NULL DEFAULT 1,
+          chat_messages           TEXT NOT NULL DEFAULT '{"currentVideo":"Aktueller Titel: \\"\${title}\\" in der Kategorie: \\"\${category}\\"","restartMessage":"Stream wird in \${duration}s neu gestartet", "pinMessage":"24/7 VOD Channel! Für Live Content folgt meinem Main Twitch Channel!"}',
           video_bitrate_kbps INTEGER NOT NULL DEFAULT 6000,
           audio_bitrate_kbps INTEGER NOT NULL DEFAULT 128,
           stream_fps      INTEGER NOT NULL DEFAULT 60,
@@ -125,6 +127,34 @@ const migrations = [
         `,
         ).run(permittedUser, permittedUser, permittedUser);
       }
+    },
+  },
+  {
+    version: 3,
+    name: 'add_pin_message',
+    up: (db) => {
+      const settingColumns = db
+        .prepare('PRAGMA table_info(settings)')
+        .all()
+        .map((column) => column.name);
+      if (!settingColumns.includes('pin_message_enabled'))
+        db.exec(
+          'ALTER TABLE settings ADD COLUMN pin_message_enabled INTEGER NOT NULL DEFAULT 1',
+        );
+    },
+  },
+  {
+    version: 4,
+    name: 'add_max_storage_gb',
+    up: (db) => {
+      const settingColumns = db
+        .prepare('PRAGMA table_info(settings)')
+        .all()
+        .map((column) => column.name);
+      if (!settingColumns.includes('max_storage_gb'))
+        db.exec(
+          'ALTER TABLE settings ADD COLUMN max_storage_gb INTEGER NOT NULL DEFAULT 100',
+        );
     },
   },
 

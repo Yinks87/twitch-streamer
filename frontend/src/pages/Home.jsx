@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { StatusProvider, useStatusContext } from '../context/StatusContext';
+import { useStatusContext } from '../context/StatusContext';
+import { useAlert } from '../context/AlertContext';
 import StreamHeroPanel from '../panels/StreamHeroPanel';
 import DownloadsPanelFile from '../panels/DownloadsPanel';
 import MediaLibraryPanel from '../panels/MediaLibraryPanel';
@@ -9,7 +10,6 @@ import PlaylistPanel from '../panels/PlaylistPanel';
 import UploadDialog from '../components/UploadDialog';
 import MetadataEditor from '../components/MetadataEditor';
 import Button from '../components/Button';
-import Banner from '../components/Banner';
 import {
   Console,
   ConsoleHeader,
@@ -33,13 +33,8 @@ const VOD_STATUS_LABEL = {
 
 const PRIVILEGED_ROLES = ['admin', 'broadcaster'];
 
-
 export default function Home() {
-  return (
-    <StatusProvider>
-      <PlayerPageContent />
-    </StatusProvider>
-  );
+  return <PlayerPageContent />;
 }
 
 // Guarded destructive buttons — read stream status from context so the parent list doesn't
@@ -66,6 +61,8 @@ function PlayerPageContent() {
   const [user, setUser] = useState(undefined); // undefined = loading, null = not logged in
   const [pageLoading, setPageLoading] = useState(true);
 
+  const { showAlert } = useAlert();
+
   const [settings, setSettings] = useState({
     twitchServer: '',
     streamKey: '',
@@ -78,13 +75,14 @@ function PlayerPageContent() {
     restartDelaySeconds: 5,
   });
   const [videos, setVideos] = useState([]);
+  const [storage, setStorage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadDialogFiles, setUploadDialogFiles] = useState(null); // null = closed
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
   const [editingVideo, setEditingVideo] = useState(null); // { name, transcript }
 
-  const [libraryTab, setLibraryTab] = useState('uploads'); // 'uploads' | 'vods'
+  const [libraryTab, setLibraryTab] = useState('uploads'); // 'uploads' | 'vods' | 'clips'
   const [vods, setVods] = useState([]);
   const [vodsLoading, setVodsLoading] = useState(false);
   const [vodsPagination, setVodsPagination] = useState(null);
@@ -93,11 +91,17 @@ function PlayerPageContent() {
   const [vodSource, setVodSource] = useState('own'); // 'own' | 'other'
   const [altUsernameInput, setAltUsernameInput] = useState('');
 
+  const [clips, setClips] = useState([]);
+  const [clipsLoading, setClipsLoading] = useState(false);
+  const [clipsPagination, setClipsPagination] = useState(null);
+  const [clipSortBy, setClipSortBy] = useState('date'); // 'date' | 'views'
+  const [clipCreatorFilter, setClipCreatorFilter] = useState('');
+
   const [playlist, setPlaylist] = useState([]);
   const [draggedPlaylistId, setDraggedPlaylistId] = useState(null);
   const [dragOverPlaylistId, setDragOverPlaylistId] = useState(null);
 
-  const [message, setMessage] = useState(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState(null);
 
   const loadMe = useCallback(async () => {
     const { user } = await api.getMe();
@@ -122,6 +126,7 @@ function PlayerPageContent() {
   const loadVideos = useCallback(async () => {
     const data = await api.getVideos();
     setVideos(data.videos);
+    setStorage(data.storage);
   }, []);
 
   const loadPlaylist = useCallback(async () => {
@@ -151,7 +156,7 @@ function PlayerPageContent() {
         });
         if (!silent) setVodsPagination(data.pagination);
       } catch (err) {
-        if (!silent) setMessage({ type: 'error', text: err.message });
+        if (!silent) showAlert({ severity: 'error', message: err.message });
       } finally {
         if (!silent) setVodsLoading(false);
       }
@@ -163,9 +168,9 @@ function PlayerPageContent() {
     Promise.all([
       loadMe().catch(() => navigate('/', { replace: true })),
       loadSettings().catch((e) =>
-        setMessage({ type: 'error', text: e.message }),
+        showAlert({ severity: 'error', message: e.message }),
       ),
-      loadVideos().catch((e) => setMessage({ type: 'error', text: e.message })),
+      loadVideos().catch((e) => showAlert({ severity: 'error', message: e.message })),
       loadPlaylist().catch(() => {}),
     ]).finally(() => setPageLoading(false));
   }, [loadMe, loadSettings, loadVideos, loadPlaylist, navigate]);
@@ -173,6 +178,37 @@ function PlayerPageContent() {
   useEffect(() => {
     if (libraryTab === 'vods' && user && vods.length === 0) loadVods();
   }, [libraryTab, user, vods.length, loadVods]);
+
+  const loadClips = useCallback(
+    async (after, silent = false) => {
+      if (!silent) setClipsLoading(true);
+      try {
+        const data = await api.getClips(after, vodUserLogin ?? undefined);
+        setClips((prev) => {
+          if (!after) {
+            if (silent && prev.length > 0) {
+              const byId = new Map(data.data.map((c) => [c.id, c]));
+              return prev.map((c) =>
+                byId.has(c.id) ? { ...c, ...byId.get(c.id) } : c,
+              );
+            }
+            return data.data;
+          }
+          return [...prev, ...data.data];
+        });
+        if (!silent) setClipsPagination(data.pagination);
+      } catch (err) {
+        if (!silent) showAlert({ severity: 'error', message: err.message });
+      } finally {
+        if (!silent) setClipsLoading(false);
+      }
+    },
+    [vodUserLogin],
+  );
+
+  useEffect(() => {
+    if (libraryTab === 'clips' && user && clips.length === 0) loadClips();
+  }, [libraryTab, user, clips.length, loadClips]);
 
   // Baseline dynamic refresh — keeps the Mediathek and Playlist views in sync with
   // changes made elsewhere (e.g. a transcript completed in another tab) without
@@ -192,56 +228,89 @@ function PlayerPageContent() {
     const id = setInterval(() => {
       loadPlaylist().catch(() => {});
       if (user) loadVods(undefined, true).catch(() => {});
+      if (user) loadClips(undefined, true).catch(() => {});
     }, 1000);
     return () => clearInterval(id);
-  }, [playlist, loadPlaylist, loadVods, user]);
+  }, [playlist, loadPlaylist, loadVods, loadClips, user]);
 
   if (pageLoading) return <PageLoading page="Player" />;
   if (!user) return null;
 
   async function handleFiles(fileList) {
     if (!fileList || fileList.length === 0) return;
-    // Open the upload dialog to set category and titles before uploading.
-    setUploadDialogFiles(Array.from(fileList));
+    const files = Array.from(fileList);
+    try {
+      await api.checkStorage(
+        files.reduce((total, file) => total + file.size, 0),
+      );
+      // Open the upload dialog only when the selected files fit the limit.
+      setUploadDialogFiles(files);
+    } catch (err) {
+      showAlert({ severity: 'error', message: err.message });
+    }
   }
 
   async function doUpload(files, metaList) {
     setUploadDialogFiles(null);
     setUploading(true);
-    setMessage(null);
     try {
+      await api.checkStorage(
+        files.reduce((total, file) => total + file.size, 0),
+      );
       await api.uploadVideos(files, metaList);
       await Promise.all([loadVideos(), loadPlaylist()]);
-      setMessage({
-        type: 'info',
-        text: `${files.length} Datei(en) hochgeladen.`,
+      showAlert({
+        severity: 'info',
+        message: `${files.length} Datei(en) hochgeladen.`,
       });
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     } finally {
       setUploading(false);
     }
   }
 
   async function handleDelete(name) {
+    setDeleteConfirmation(name);
+  }
+
+  async function confirmDelete() {
+    const name = deleteConfirmation;
+    if (!name) return;
+    setDeleteConfirmation(null);
     try {
       await api.deleteVideo(name);
       await Promise.all([loadVideos(), loadPlaylist()]);
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     }
   }
 
   async function handleImportVod(vod) {
     try {
-      await api.importVod(vod.id, vod.title);
+      await api.importVod(vod.id, vod.title, {
+        muted_segments: vod.muted_segments,
+      });
       await Promise.all([loadPlaylist(), loadVods()]);
-      setMessage({
-        type: 'info',
-        text: `Download von "${vod.title}" gestartet.`,
+      showAlert({
+        severity: 'info',
+        message: `Download von "${vod.title}" gestartet.`,
       });
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
+    }
+  }
+
+  async function handleImportClip(clip) {
+    try {
+      await api.importClip(clip.id, clip.title);
+      await Promise.all([loadPlaylist(), loadClips()]);
+      showAlert({
+        severity: 'info',
+        message: `Download von "${clip.title}" gestartet.`,
+      });
+    } catch (err) {
+      showAlert({ severity: 'error', message: err.message });
     }
   }
 
@@ -250,7 +319,7 @@ function PlayerPageContent() {
       await api.togglePlaylistEntry(id, enabled);
       await loadPlaylist();
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     }
   }
 
@@ -258,9 +327,9 @@ function PlayerPageContent() {
     try {
       await api.addToPlaylist(filename);
       await loadPlaylist();
-      setMessage({ type: 'info', text: 'Video zur Playlist hinzugefügt.' });
+      showAlert({ severity: 'info', message: 'Video zur Playlist hinzugefügt.' });
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     }
   }
 
@@ -269,7 +338,7 @@ function PlayerPageContent() {
       await api.removeFromPlaylist(id);
       await loadPlaylist();
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     }
   }
 
@@ -308,7 +377,7 @@ function PlayerPageContent() {
       if (Array.isArray(data.playlist)) setPlaylist(data.playlist);
     } catch (err) {
       await loadPlaylist();
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     }
   }
 
@@ -338,10 +407,108 @@ function PlayerPageContent() {
           onClose={() => setEditingVideo(null)}
         />
       )}
+      {deleteConfirmation && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,.75)',
+            zIndex: 300,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          onClick={() => setDeleteConfirmation(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-video-title"
+            style={{
+              background: 'var(--surface, #1a1a2e)',
+              borderRadius: '8px',
+              padding: '1.5rem',
+              width: 'min(440px,92vw)',
+              boxShadow: '0 8px 32px rgba(0,0,0,.6)',
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id="delete-video-title" style={{ margin: '0 0 0.75rem' }}>
+              Video löschen?
+            </h3>
+            <p
+              style={{
+                margin: '0 0 1rem',
+                fontSize: '0.9rem',
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>{deleteConfirmation}</strong> wird dauerhaft gelöscht und
+              aus der Playlist entfernt. Diese Aktion kann nicht rückgängig
+              gemacht werden.
+            </p>
+            <div
+              style={{
+                display: 'flex',
+                gap: '0.5rem',
+                justifyContent: 'flex-end',
+                marginTop: '1.25rem',
+              }}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setDeleteConfirmation(null)}
+              >
+                Abbrechen
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                danger
+                onClick={confirmDelete}
+              >
+                Endgültig löschen
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       <ConsoleHeader>
         <div>
           <Eyebrow>Erstelle deine 24/7 Twitch Playlist</Eyebrow>
           <h1>Twitch 24/7 Player</h1>
+          {user.broadcasterLogin && (
+            <Eyebrow
+              as="a"
+              href={`https://www.twitch.tv/${encodeURIComponent(user.broadcasterLogin)}`}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                margin: '0.4rem 0 0',
+                textDecoration: 'none',
+              }}
+            >
+              {user.broadcasterProfileImageUrl && (
+                <img
+                  src={user.broadcasterProfileImageUrl}
+                  alt=""
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                  }}
+                />
+              )}
+              <strong>
+                {user.broadcasterDisplayName || user.broadcasterLogin}
+              </strong>
+            </Eyebrow>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           {user && (
@@ -352,36 +519,6 @@ function PlayerPageContent() {
                 gap: '0.5rem',
               }}
             >
-              <span
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  fontSize: '0.85rem',
-                  opacity: 0.8,
-                }}
-              >
-                <a
-                  href={`https://www.twitch.tv/${user.login}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {user.profileImageUrl && (
-                    <img
-                      src={user.profileImageUrl}
-                      alt=""
-                      style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: '50%',
-                        objectFit: 'cover',
-                        verticalAlign: 'middle',
-                        marginRight: '0.45rem',
-                      }}
-                    />
-                  )}
-                </a>
-                <strong>{user.displayName}</strong>
-              </span>
               <Button
                 variant="ghost"
                 onClick={handleLogout}
@@ -403,31 +540,11 @@ function PlayerPageContent() {
           )}
         </div>
       </ConsoleHeader>
-
-      {message && (
-        <Banner type={message.type} role="status">
-          {message.text}
-          <button
-            onClick={() => setMessage(null)}
-            style={{
-              marginLeft: '1rem',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              opacity: 0.7,
-            }}
-          >
-            ✕
-          </button>
-        </Banner>
-      )}
-
       <ConsoleGrid>
         <StreamHeroPanel
           settings={settings}
           setSettings={setSettings}
           readyPlaylist={readyPlaylist}
-          setMessage={setMessage}
           userRole={user.role}
         />
 
@@ -435,6 +552,7 @@ function PlayerPageContent() {
           libraryTab={libraryTab}
           setLibraryTab={setLibraryTab}
           videos={videos}
+          storage={storage}
           uploading={uploading}
           dragOver={dragOver}
           setDragOver={setDragOver}
@@ -458,11 +576,21 @@ function PlayerPageContent() {
           setAltUsernameInput={setAltUsernameInput}
           onImportVod={handleImportVod}
           onLoadMoreVods={loadVods}
+          clips={clips}
+          setClips={setClips}
+          clipsLoading={clipsLoading}
+          clipsPagination={clipsPagination}
+          clipSortBy={clipSortBy}
+          setClipSortBy={setClipSortBy}
+          clipCreatorFilter={clipCreatorFilter}
+          setClipCreatorFilter={setClipCreatorFilter}
+          onImportClip={handleImportClip}
+          onLoadMoreClips={loadClips}
         />
       </ConsoleGrid>
 
       {/* ── Active downloads ──────────────────────────────────────────────────── */}
-      <DownloadsPanelFile onAborted={loadPlaylist} setMessage={setMessage} />
+      <DownloadsPanelFile onAborted={loadPlaylist} />
 
       {/* ── Playlist ─────────────────────────────────────────────────────────── */}
       <PlaylistPanel

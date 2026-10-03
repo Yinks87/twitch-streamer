@@ -4,6 +4,7 @@ import config from '../../config.js';
 import * as db from '../../db/db.js';
 import { getSessionToken } from '../../middleware/index.js';
 import { authAPI, getStreamKey, twitchAPI } from '../../twitch/api.js';
+import { connectToTwitchEventSubs } from '../../twitch/event-subs/eventsubs.js';
 const twitchAuthRouter = express.Router();
 
 const {
@@ -54,7 +55,7 @@ twitchAuthRouter.get('/twitch', (req, res) => {
     redirect_uri: TWITCH_REDIRECT_URI,
     response_type: 'code',
     scope:
-      'channel:read:stream_key user:read:broadcast channel:manage:broadcast user:write:chat',
+      'channel:read:stream_key user:read:broadcast channel:manage:broadcast user:write:chat user:read:chat moderator:manage:chat_messages',
     state: state,
   });
   const url = new URL('https://id.twitch.tv/oauth2/authorize');
@@ -132,9 +133,7 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
         'This Twitch user is not authorized to use the application.',
       );
     }
-    const role = isPermittedUser
-      ? 'broadcaster'
-      : existingUser.role;
+    const role = isPermittedUser ? 'broadcaster' : existingUser.role;
 
     if (!existingUser) {
       db.upsertUser({
@@ -154,6 +153,7 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
     if (role === 'broadcaster') {
       const streamKey = await getStreamKey();
       db.saveSettings({ streamKey });
+      connectToTwitchEventSubs();
     }
 
     // Persist user and create session
@@ -195,6 +195,9 @@ twitchAuthRouter.get('/me', (req, res) => {
       login: user.login,
       displayName: user.display_name,
       role: user.role,
+      broadcasterLogin: broadcaster?.login ?? null,
+      broadcasterDisplayName: broadcaster?.display_name ?? null,
+      broadcasterProfileImageUrl: broadcaster?.profile_image_url ?? null,
       broadcasterType: broadcaster?.broadcaster_type ?? null,
       profileImageUrl: user.profile_image_url,
     },

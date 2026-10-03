@@ -12,6 +12,16 @@ const apiClient = axios.create({
   baseURL: BASE,
 });
 
+// Surface the backend's JSON { error } message instead of axios's generic
+// "Request failed with status code 500" so callers can show the real reason.
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const message = error.response?.data?.error || error.message;
+    return Promise.reject(new Error(message));
+  },
+);
+
 export const api = {
   // Auth
   getMe: () => apiClient.get(`/auth/me`).then((res) => res.data),
@@ -32,6 +42,8 @@ export const api = {
 
   // Videos
   getVideos: () => apiClient.get(`/videos`).then((res) => res.data),
+  checkStorage: (bytes = 0) =>
+    apiClient.post(`/storage/check`, { bytes }).then((res) => res.data),
   deleteVideo: (name) =>
     apiClient
       .delete(`/videos/${encodeURIComponent(name)}`)
@@ -40,15 +52,19 @@ export const api = {
     apiClient
       .put(`/videos/${encodeURIComponent(name)}/transcript`, transcript)
       .then((res) => res.data),
+  trimVideo: (name, segments) =>
+    apiClient
+      .post(`/videos/${encodeURIComponent(name)}/trim`, { segments })
+      .then((res) => res.data),
+  getTrimProgress: (name) =>
+    apiClient
+      .get(`/videos/${encodeURIComponent(name)}/trim-progress`)
+      .then((res) => res.data),
   uploadVideos: (files, metaList) => {
     const form = new FormData();
     Array.from(files).forEach((file) => form.append('videos', file));
     if (metaList) form.append('meta', JSON.stringify(metaList));
-    return fetch(`/upload`, {
-      method: 'POST',
-      credentials: 'include',
-      body: form,
-    }).then(handle);
+    return apiClient.post(`/upload`, form).then((res) => res.data);
   },
 
   // Active downloads
@@ -66,10 +82,26 @@ export const api = {
       .get(`/twitch/vods${qs ? `?${qs}` : ''}`)
       .then((res) => res.data);
   },
-  importVod: (id, title) =>
+  importVod: (id, title, extra = {}) =>
     apiClient
-      .post(`/twitch/vods/${id}/import`, { title })
+      .post(`/twitch/vods/${id}/import`, { title, ...extra })
       .then((res) => res.data),
+
+  // Twitch Clips
+  getClips: (after, userLogin) => {
+    const p = new URLSearchParams();
+    if (after) p.set('after', after);
+    if (userLogin) p.set('user_login', userLogin);
+    const qs = p.toString();
+    return apiClient
+      .get(`/twitch/clips${qs ? `?${qs}` : ''}`)
+      .then((res) => res.data);
+  },
+  importClip: (id, title, extra = {}) =>
+    apiClient
+      .post(`/twitch/clips/${id}/import`, { title, ...extra })
+      .then((res) => res.data),
+
   searchCategories: (query) =>
     apiClient
       .get(`/twitch/categories?query=${encodeURIComponent(query)}`)

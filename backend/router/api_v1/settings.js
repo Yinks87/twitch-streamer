@@ -28,6 +28,8 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     restartDelaySeconds,
     chatMessages,
     chatMessagesEnabled,
+    pinMessageEnabled,
+    maxStorageGb,
   } = req.body || {};
   if (twitchServer !== undefined && typeof twitchServer !== 'string')
     return res.status(400).json({ error: 'twitchServer must be a string' });
@@ -89,6 +91,20 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     return res
       .status(400)
       .json({ error: 'chatMessagesEnabled must be a boolean' });
+  if (
+    pinMessageEnabled !== undefined &&
+    typeof pinMessageEnabled !== 'boolean'
+  )
+    return res
+      .status(400)
+      .json({ error: 'pinMessageEnabled must be a boolean' });
+  if (
+    maxStorageGb !== undefined &&
+    (!Number.isInteger(maxStorageGb) || maxStorageGb < 1 || maxStorageGb > 100000)
+  )
+    return res
+      .status(400)
+      .json({ error: 'maxStorageGb must be an integer between 1 and 100000' });
   const saved = db.saveSettings({
     twitchServer,
     streamKey: isPrivileged(req.user) ? streamKey : undefined,
@@ -102,6 +118,8 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     restartDelaySeconds,
     chatMessages,
     chatMessagesEnabled,
+    pinMessageEnabled,
+    maxStorageGb,
   });
   if (!isPrivileged(req.user)) saved.streamKey = '';
   res.json(saved);

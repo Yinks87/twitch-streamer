@@ -3,33 +3,7 @@ import { api } from '../api';
 import { defaultTimestamp } from '../utils/transcript';
 import Button from './Button';
 import { Input } from './FormControls';
-
-// ── Shared: hh:mm:ss input masking ───────────────────────────────────────────
-function clampSegment(segment, max) {
-  if (segment.length < 2) return segment;
-  const num = parseInt(segment, 10);
-  if (Number.isNaN(num)) return segment;
-  return String(Math.min(num, max)).padStart(2, '0');
-}
-
-// Strips anything that isn't a digit and progressively re-inserts the hh:mm:ss colons,
-// clamping minutes/seconds to 0-59 as soon as both of their digits are present.
-function maskTimeInput(raw) {
-  const digits = raw.replace(/\D/g, '').slice(0, 6);
-  const hh = digits.slice(0, 2);
-  const mm = clampSegment(digits.slice(2, 4), 59);
-  const ss = clampSegment(digits.slice(4, 6), 59);
-  return [hh, mm, ss].filter((segment) => segment.length > 0).join(':');
-}
-
-// Pads an in-progress hh:mm:ss value to a full, valid timestamp on blur.
-function completeTimeInput(raw) {
-  const digits = raw.replace(/\D/g, '').padEnd(6, '0').slice(0, 6);
-  const hh = digits.slice(0, 2);
-  const mm = clampSegment(digits.slice(2, 4), 59);
-  const ss = clampSegment(digits.slice(4, 6), 59);
-  return `${hh}:${mm}:${ss}`;
-}
+import TimeInput from './TimeInput';
 
 // ── Shared: Category autocomplete input ──────────────────────────────────────
 function CategoryInput({ value = '', onChange }) {
@@ -313,18 +287,9 @@ function TimestampCard({ timestamp, index, storageKey, onChange, onRemove }) {
           <div
             style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}
           >
-            <Input
-              type="text"
-              inputMode="numeric"
+            <TimeInput
               value={timestamp.time ?? '00:00:00'}
-              onChange={(e) =>
-                onChange({ time: maskTimeInput(e.target.value) })
-              }
-              onBlur={(e) =>
-                onChange({ time: completeTimeInput(e.target.value) })
-              }
-              style={{ width: '92px', fontFamily: 'monospace', flexShrink: 0 }}
-              placeholder="hh:mm:ss"
+              onChange={(time) => onChange({ time })}
               title="Zeit (hh:mm:ss)"
             />
             <div style={{ flex: 1 }}>

@@ -34,7 +34,7 @@ playlistRouter.post('/playlist', async (req, res) => {
 
   const first = transcript.timestamps?.[0] || {};
   const entry = db.addPlaylistEntry({
-    source: transcript.source === 'vod' ? 'vod' : 'upload',
+    source: ['vod', 'clip'].includes(transcript.source) ? transcript.source : 'upload',
     title: first.title || filename,
     filename,
     vodId: transcript.vodId || null,

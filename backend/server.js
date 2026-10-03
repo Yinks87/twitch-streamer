@@ -9,11 +9,13 @@ import { streamEvents } from './streamManager.js';
 import baseRouter from './router/index.js';
 import {
   applyChannelUpdate,
+  pinChatMessage,
   sendChatMessage,
   startAccessTokenValidationLoop,
 } from './twitch/api.js';
 import { readTranscript } from './utils/transcript.js';
 import { parseTemplate } from './utils/template-parser.js';
+import { connectToTwitchEventSubs } from './twitch/event-subs/eventsubs.js';
 
 const { PORT, VIDEOS_DIR, FRONTEND_URL } = config;
 
@@ -68,9 +70,9 @@ app.get(['/', '/app'], (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Twitch streamer backend listening on port ${PORT}`);
-  console.log(`Videos folder: ${VIDEOS_DIR}`);
+  console.log(`[APP] Twitch streamer backend listening on port ${PORT}`);
   startAccessTokenValidationLoop();
+  connectToTwitchEventSubs();
 });
 
 // ── Twitch channel auto-update on video change ────────────────────────────────
@@ -104,9 +106,16 @@ streamEvents.on('scheduledRestart', async ({ delaySeconds }) => {
     broadcaster_id: user.twitch_user_id,
     sender_id: user.twitch_user_id,
     message: parseTemplate(message, { duration: delaySeconds }),
-  }).catch((err) =>
-    console.error('[scheduled-restart] chat notification error:', err.message),
-  );
+  })
+    .then((res) => {
+      console.log('restart message sent:', res);
+    })
+    .catch((err) =>
+      console.error(
+        '[scheduled-restart] chat notification error:',
+        err.message,
+      ),
+    );
 });
 
 streamEvents.on('videoChanged', async (filename, context = {}) => {
@@ -121,7 +130,7 @@ streamEvents.on('videoChanged', async (filename, context = {}) => {
       : [{ time: '00:00:00', category: '', category_id: null, title: '' }];
 
   const user = db.getBroadcasterUser();
-  let settings, chatMessagesEnabled, chatMessages;
+  let settings, chatMessagesEnabled, pinMessageEnabled, chatMessages;
 
   if (!user) return;
 
@@ -138,12 +147,22 @@ streamEvents.on('videoChanged', async (filename, context = {}) => {
       first.category || '',
       first.category_id ?? null,
     )
-      .then(() => {
+      .then(async () => {
         settings = db.getSettings();
         chatMessagesEnabled = settings?.chatMessagesEnabled;
+        pinMessageEnabled = settings?.pinMessageEnabled;
         chatMessages = settings?.chatMessages;
+        if (pinMessageEnabled) {
+          await sendChatMessage({
+            access_token: user.access_token,
+            sender_id: user.twitch_user_id,
+            broadcaster_id: user.twitch_user_id,
+            message: chatMessages.pinMessage,
+          });
+        }
+
         if (chatMessagesEnabled) {
-          sendChatMessage({
+          await sendChatMessage({
             access_token: user.access_token,
             sender_id: user.twitch_user_id,
             broadcaster_id: user.twitch_user_id,
@@ -173,14 +192,23 @@ streamEvents.on('videoChanged', async (filename, context = {}) => {
         ts.category,
         ts.category_id,
       )
-        .then(() => {
+        .then(async () => {
           // Refresh settings before sending chat message
           settings = db.getSettings();
           chatMessagesEnabled = settings?.chatMessagesEnabled;
+          pinMessageEnabled = settings?.pinMessageEnabled;
           chatMessages = settings?.chatMessages;
 
+          if (pinMessageEnabled) {
+            await sendChatMessage({
+              access_token: freshUser.access_token,
+              sender_id: freshUser.twitch_user_id,
+              broadcaster_id: freshUser.twitch_user_id,
+              message: chatMessages.pinMessage,
+            });
+          }
           if (chatMessagesEnabled) {
-            sendChatMessage({
+            await sendChatMessage({
               access_token: freshUser.access_token,
               sender_id: freshUser.twitch_user_id,
               broadcaster_id: freshUser.twitch_user_id,

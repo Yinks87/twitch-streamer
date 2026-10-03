@@ -60,6 +60,35 @@ const TwitchMessagesPanel = ({
             })
           }
         />
+        <Hint>Angepinnte Nachricht ein-/ausschalten</Hint>
+        <Checkbox
+          onChange={(e) =>
+            setSettings({
+              ...settings,
+              pinMessageEnabled: e.target.checked,
+              chatMessages: {
+                ...settings.chatMessages,
+              },
+            })
+          }
+          checked={settings?.pinMessageEnabled || false}
+          label="Angepinnte Nachricht aktivieren"
+        />
+
+        <Hint>Nachricht die beim Neustart des Streams angepint wird.</Hint>
+        <Input
+          label="Angepinnte Nachricht"
+          value={settings?.chatMessages?.pinMessage || ''}
+          onChange={(e) =>
+            setSettings({
+              ...settings,
+              chatMessages: {
+                ...settings.chatMessages,
+                pinMessage: e.target.value,
+              },
+            })
+          }
+        />
         <Button
           variant="primary"
           type="submit"

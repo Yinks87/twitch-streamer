@@ -241,7 +241,7 @@ function buildPlaylistContent() {
       ? null
       : playlistSource === 'uploads_only'
         ? 'upload'
-        : 'vod';
+        : ['vod', 'clip'];
   const entries = db
     .getPlaylist(filter)
     .filter(
@@ -254,10 +254,10 @@ function buildPlaylistContent() {
   if (entries.length === 0) {
     throw new Error(
       playlistSource === 'vods_only'
-        ? 'No imported VODs in the playlist. Import a VOD first.'
+        ? 'No imported VODs/clips in the playlist. Import one first.'
         : playlistSource === 'uploads_only'
           ? 'No uploaded videos in the playlist. Upload a file first.'
-          : 'Playlist is empty. Upload a video, import a VOD, or complete a transcript missing its category first.',
+          : 'Playlist is empty. Upload a video, import a VOD/clip, or complete a transcript missing its category first.',
     );
   }
 

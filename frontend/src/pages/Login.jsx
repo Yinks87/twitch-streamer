@@ -3,7 +3,7 @@ import styled from '@emotion/styled';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import Button from '../components/Button';
-import Banner from '../components/Banner';
+import { useAlert } from '../context/AlertContext';
 import { Eyebrow } from '../components/ConsoleLayout';
 import PageLoading from '../components/PageLoading';
 import icon from '../assets/icon.png';
@@ -11,13 +11,16 @@ import icon from '../assets/icon.png';
 // ── Login page (/) ────────────────────────────────────────────────────────────
 export default function Login() {
   const navigate = useNavigate();
-  const [error, setError] = useState(null);
+  const { showAlert } = useAlert();
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.has('error')) {
-      setError(decodeURIComponent(params.get('error')));
+      showAlert({
+        severity: 'error',
+        message: decodeURIComponent(params.get('error')),
+      });
       window.history.replaceState({}, '', '/');
     }
     // Already logged in → go straight to the player
@@ -28,7 +31,7 @@ export default function Login() {
         else setChecking(false);
       })
       .catch(() => setChecking(false));
-  }, [navigate]);
+  }, [navigate, showAlert]);
 
   if (checking) return <PageLoading page="Login-Seite" />;
 
@@ -38,12 +41,6 @@ export default function Login() {
       <Eyebrow>
         Erstelle deine 24/7 Twitch Playlist und streame auf einen Twitch-Kanal
       </Eyebrow>
-      {error && (
-        <Banner type="error" role="alert">
-          {error}
-        </Banner>
-      )}
-
       <Button
         as="a"
         href={api.loginUrl}

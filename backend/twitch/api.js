@@ -267,7 +267,7 @@ export async function sendChatMessage({
         data: { data },
       } = await twitchAPI.post(`/chat/messages`, body, {
         headers: {
-          'Client-ID': TWITCH_CLIENT_ID,
+          'Client-Id': TWITCH_CLIENT_ID,
           Authorization: `Bearer ${validToken}`,
           'Content-Type': 'application/json',
         },
@@ -296,7 +296,7 @@ export async function getBroadcasterData() {
         `/users?id=${encodeURIComponent(broadcaster.twitch_user_id)}`,
         {
           headers: {
-            'Client-ID': TWITCH_CLIENT_ID,
+            'Client-Id': TWITCH_CLIENT_ID,
             Authorization: `Bearer ${validToken}`,
           },
         },
@@ -314,7 +314,6 @@ export async function getBroadcasterData() {
   });
 }
 
-
 export async function getStreamKey() {
   const broadcaster = db.getBroadcasterUser();
   if (!broadcaster?.access_token) throw new Error(STREAMER_DATA_ERROR);
@@ -325,7 +324,7 @@ export async function getStreamKey() {
         `/streams/key?broadcaster_id=${broadcaster.twitch_user_id}`,
         {
           headers: {
-            'Client-ID': TWITCH_CLIENT_ID,
+            'Client-Id': TWITCH_CLIENT_ID,
             Authorization: `Bearer ${validToken}`,
           },
         },
@@ -338,6 +337,39 @@ export async function getStreamKey() {
       console.error('Error fetching stream key from Twitch API:', error);
       throw new Error(
         `Failed to fetch stream key: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+      );
+    }
+  });
+}
+
+export async function pinChatMessage(message_id) {
+  const broadcaster = db.getBroadcasterUser();
+  if (!broadcaster?.access_token) throw new Error(STREAMER_DATA_ERROR);
+
+  return validateAndProceed(broadcaster.access_token, async (validToken) => {
+    try {
+      const qs = new URLSearchParams({
+        broadcaster_id: broadcaster.twitch_user_id,
+        moderator_id: broadcaster.twitch_user_id,
+        message_id,
+      });
+
+      // axios.put(url, data, config): headers must be the third argument
+      const response = await twitchAPI.put(`/chat/pins?${qs}`, null, {
+        headers: {
+          Authorization: `Bearer ${validToken}`,
+          'Client-Id': TWITCH_CLIENT_ID,
+        },
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error(
+        'Error pinning chat message via Twitch API:',
+        error.message,
+      );
+      throw new Error(
+        `Failed to pin chat message: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
       );
     }
   });

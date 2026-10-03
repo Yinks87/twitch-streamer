@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { api } from '../api';
 import TimestampEditor from './TimestampEditor';
 import { defaultTimestamp, normalizeTranscript } from '../utils/transcript';
+import { useAlert } from '../context/AlertContext';
 import Button from './Button';
 
 // ── Metadata editor (for existing videos / active downloads) ──────────────────
 export default function MetadataEditor({ filename, initialTranscript, onSave, onClose }) {
+  const { showAlert } = useAlert();
   const seed = normalizeTranscript(initialTranscript || {}).timestamps;
   const [timestamps, setTimestamps] = useState(seed);
   const [saving, setSaving] = useState(false);
@@ -21,7 +23,7 @@ export default function MetadataEditor({ filename, initialTranscript, onSave, on
       onSave?.();
       onClose();
     } catch (err) {
-      alert(err.message);
+      showAlert({ severity: 'error', message: err.message });
     } finally {
       setSaving(false);
     }

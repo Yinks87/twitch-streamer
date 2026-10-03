@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import { api } from '../api';
+import { useAlert } from '../context/AlertContext';
 import Button from '../components/Button';
 import { Input, Select } from '../components/FormControls';
 import { Chip, Avatar } from '@mui/material';
@@ -11,7 +12,8 @@ const ROLE_LABELS = {
   admin: 'Admin',
 };
 
-export default function UserManagementPanel({ setMessage }) {
+export default function UserManagementPanel() {
+  const { showAlert } = useAlert();
   const [managers, setManagers] = useState([]);
   const [login, setLogin] = useState('');
   const [role, setRole] = useState('manager');
@@ -23,11 +25,11 @@ export default function UserManagementPanel({ setMessage }) {
       const data = await api.getManagers();
       setManagers(data.managers || []);
     } catch (error) {
-      setMessage({ type: 'error', text: error.message });
+      showAlert({ severity: 'error', message: error.message });
     } finally {
       setLoading(false);
     }
-  }, [setMessage]);
+  }, [showAlert]);
 
   useEffect(() => {
     loadManagers();
@@ -42,12 +44,12 @@ export default function UserManagementPanel({ setMessage }) {
       const data = await api.addManager(value, role);
       setManagers((current) => [...current, data.manager]);
       setLogin('');
-      setMessage({
-        type: 'info',
-        text: `${data.manager.display_name} wurde als ${ROLE_LABELS[data.manager.role] || data.manager.role} hinzugefügt.`,
+      showAlert({
+        severity: 'info',
+        message: `${data.manager.display_name} wurde als ${ROLE_LABELS[data.manager.role] || data.manager.role} hinzugefügt.`,
       });
     } catch (error) {
-      setMessage({ type: 'error', text: error.message });
+      showAlert({ severity: 'error', message: error.message });
     } finally {
       setSaving(false);
     }
@@ -59,12 +61,12 @@ export default function UserManagementPanel({ setMessage }) {
       setManagers((current) =>
         current.filter((item) => item.id !== manager.id),
       );
-      setMessage({
-        type: 'info',
-        text: `${manager.display_name} wurde entfernt.`,
+      showAlert({
+        severity: 'info',
+        message: `${manager.display_name} wurde entfernt.`,
       });
     } catch (error) {
-      setMessage({ type: 'error', text: error.message });
+      showAlert({ severity: 'error', message: error.message });
     }
   }
 

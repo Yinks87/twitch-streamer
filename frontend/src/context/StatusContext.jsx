@@ -38,7 +38,14 @@ export function StatusProvider({ children }) {
   }, []);
 
   return (
-    <StatusContext.Provider value={{ status, setStatus, downloads, refreshStatus }}>
+    <StatusContext.Provider
+      value={{
+        status,
+        setStatus,
+        downloads,
+        refreshStatus,
+      }}
+    >
       {children}
     </StatusContext.Provider>
   );

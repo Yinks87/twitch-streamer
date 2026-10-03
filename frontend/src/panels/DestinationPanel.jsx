@@ -158,6 +158,18 @@ export default function DestinationPanel({
             />
           </Field>
         </RestartRow>
+        <Field>
+          <span>Speicherlimit für Videos (GB)</span>
+          <NumberInput
+            value={settings.maxStorageGb}
+            min={1}
+            max={100000}
+            step={1}
+            onChange={(value) =>
+              setSettings((current) => ({ ...current, maxStorageGb: value }))
+            }
+          />
+        </Field>
         <Button
           variant="primary"
           type="submit"

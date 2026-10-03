@@ -1,13 +1,11 @@
-import { useEffect, useState } from 'react';
-import styled from '@emotion/styled';
-import { Input } from './FormControls';
+import TimeInput from './TimeInput';
 
 function formatDuration(totalSeconds) {
-  const seconds = Math.max(0, Number(totalSeconds) || 0);
-  const hours = String(Math.floor(seconds / 3600)).padStart(2, '0');
-  const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
-  const remaining = String(seconds % 60).padStart(2, '0');
-  return `${hours}:${minutes}:${remaining}`;
+  const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remaining = seconds % 60;
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(remaining).padStart(2, '0')}`;
 }
 
 function parseDuration(value) {
@@ -17,39 +15,20 @@ function parseDuration(value) {
 }
 
 export default function DurationInput({ value, onChange, maxSeconds }) {
-  const [text, setText] = useState(() => formatDuration(value));
+  // Enough hour digits to represent maxSeconds without the segment silently truncating.
+  const hoursDigits = Math.max(2, String(Math.floor(maxSeconds / 3600)).length);
 
-  useEffect(() => setText(formatDuration(value)), [value]);
-
-  function handleChange(event) {
-    const nextText = event.target.value;
-    setText(nextText);
-    const seconds = parseDuration(nextText);
+  function handleChange(nextValue) {
+    const seconds = parseDuration(nextValue);
     if (seconds !== null && seconds <= maxSeconds) onChange(seconds);
   }
 
-  function handleBlur() {
-    const seconds = parseDuration(text);
-    if (seconds === null || seconds > maxSeconds) setText(formatDuration(value));
-  }
-
   return (
-    <DurationField
-      type="text"
-      inputMode="numeric"
-      value={text}
-      pattern="\d+:[0-5]\d:[0-5]\d"
-      placeholder="HH:MM:SS"
-      title="Dauer im Format HH:MM:SS"
+    <TimeInput
+      value={formatDuration(value)}
       onChange={handleChange}
-      onBlur={handleBlur}
-      required
+      hoursDigits={hoursDigits}
+      title="Dauer im Format HH:MM:SS"
     />
   );
 }
-
-const DurationField = styled(Input)`
-  width: 100%;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-`;

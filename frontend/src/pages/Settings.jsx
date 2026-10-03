@@ -4,7 +4,7 @@ import { api } from '../api';
 import DestinationPanel from '../panels/DestinationPanel';
 import UserManagementPanelFile from '../panels/UserManagementPanel';
 import Button from '../components/Button';
-import Banner from '../components/Banner';
+import { useAlert } from '../context/AlertContext';
 import {
   Console,
   ConsoleHeader,
@@ -34,15 +34,18 @@ function getDestinationSettings(settings, twitchServer) {
     streamFps: settings.streamFps,
     restartIntervalSeconds: settings.restartIntervalSeconds,
     restartDelaySeconds: settings.restartDelaySeconds,
+    maxStorageGb: settings.maxStorageGb,
   };
 }
 
 function getTwitchMessageSettings(settings) {
   return {
     chatMessagesEnabled: settings.chatMessagesEnabled,
+    pinMessageEnabled: settings.pinMessageEnabled,
     chatMessages: {
       currentVideo: settings.chatMessages?.currentVideo ?? '',
       restartMessage: settings.chatMessages?.restartMessage ?? '',
+      pinMessage: settings.chatMessages?.pinMessage ?? '',
     },
   };
 }
@@ -50,6 +53,7 @@ function getTwitchMessageSettings(settings) {
 // ── Settings page (/settings) — Sendeziel & Benutzerverwaltung ────────────────
 export default function Settings() {
   const navigate = useNavigate();
+  const { showAlert } = useAlert();
   const [user, setUser] = useState(undefined); // undefined = loading, null = not logged in
   const [pageLoading, setPageLoading] = useState(true);
 
@@ -63,11 +67,15 @@ export default function Settings() {
     streamFps: 60,
     restartIntervalSeconds: 169200,
     restartDelaySeconds: 5,
+    maxStorageGb: 100,
     chatMessagesEnabled: true,
+    pinMessageEnabled: true,
     chatMessages: {
       currentVideo:
         'Aktueller Titel: "${title}" in der Kategorie: "${category}"',
       restartMessage: 'Stream wird in ${duration}s neu gestartet',
+      pinMessage:
+        '24/7 VOD Channel! Für Live Content folgt meinem Main Twitch Channel!',
     },
   });
   const [initialSettings, setInitialSettings] = useState(null);
@@ -75,7 +83,6 @@ export default function Settings() {
   const [customServer, setCustomServer] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [message, setMessage] = useState(null);
 
   const loadMe = useCallback(async () => {
     const { user } = await api.getMe();
@@ -98,9 +105,11 @@ export default function Settings() {
   useEffect(() => {
     Promise.all([
       loadMe().catch(() => navigate('/', { replace: true })),
-      loadSettings().catch((e) => setMessage({ type: 'error', text: e.message })),
+      loadSettings().catch((e) =>
+        showAlert({ severity: 'error', message: e.message }),
+      ),
     ]).finally(() => setPageLoading(false));
-  }, [loadMe, loadSettings, navigate]);
+  }, [loadMe, loadSettings, navigate, showAlert]);
 
   if (pageLoading) return <PageLoading page="Einstellungsseite" />;
   if (!user) return null;
@@ -123,7 +132,6 @@ export default function Settings() {
   async function handleSaveSettings(e) {
     e.preventDefault();
     setSavingSettings(true);
-    setMessage(null);
     try {
       const payload = {
         twitchServer: effectiveServer,
@@ -134,10 +142,13 @@ export default function Settings() {
         streamFps: Number(settings.streamFps),
         restartIntervalSeconds: Number(settings.restartIntervalSeconds),
         restartDelaySeconds: Number(settings.restartDelaySeconds),
+        maxStorageGb: Number(settings.maxStorageGb),
         chatMessagesEnabled: settings.chatMessagesEnabled,
+        pinMessageEnabled: settings.pinMessageEnabled,
         chatMessages: {
           currentVideo: settings.chatMessages.currentVideo,
           restartMessage: settings.chatMessages.restartMessage,
+          pinMessage: settings.chatMessages.pinMessage,
         },
       };
       if (user.role === 'broadcaster' || user.role === 'admin')
@@ -145,9 +156,9 @@ export default function Settings() {
       const saved = await api.saveSettings(payload);
       setSettings(saved);
       setInitialSettings(saved);
-      setMessage({ type: 'info', text: 'Einstellungen gespeichert.' });
+      showAlert({ severity: 'info', message: 'Einstellungen gespeichert.' });
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     } finally {
       setSavingSettings(false);
     }
@@ -166,24 +177,6 @@ export default function Settings() {
         </Button>
       </ConsoleHeader>
 
-      {message && (
-        <Banner type={message.type} role="status">
-          {message.text}
-          <button
-            onClick={() => setMessage(null)}
-            style={{
-              marginLeft: '1rem',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              opacity: 0.7,
-            }}
-          >
-            ✕
-          </button>
-        </Banner>
-      )}
-
       <ConsoleGrid>
         <DestinationPanel
           settings={settings}
@@ -201,7 +194,7 @@ export default function Settings() {
         />
 
         {(user.role === 'broadcaster' || user.role === 'admin') && (
-          <UserManagementPanelFile setMessage={setMessage} />
+          <UserManagementPanelFile />
         )}
         {(user.role === 'broadcaster' || user.role === 'admin') && (
           <TwitchMessagesPanel
@@ -213,10 +206,7 @@ export default function Settings() {
           />
         )}
         {/* ── Stream logs (admin only) ─────────────────────────────────────────── */}
-        <LogsPanel
-          userRole={user.role}
-          setMessage={setMessage}
-        />
+        <LogsPanel userRole={user.role} />
       </ConsoleGrid>
     </Console>
   );

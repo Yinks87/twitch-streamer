@@ -3,6 +3,7 @@ import { css, keyframes } from '@emotion/react';
 import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import { useStatusContext } from '../context/StatusContext';
+import { useAlert } from '../context/AlertContext';
 import { api } from '../api';
 import Button from '../components/Button';
 import { Select } from '../components/FormControls';
@@ -53,20 +54,19 @@ const StreamHeroPanel = ({
   settings,
   setSettings,
   readyPlaylist,
-  setMessage,
   userRole,
 }) => {
   const { status, setStatus } = useStatusContext();
+  const { showAlert } = useAlert();
   const [busy, setBusy] = useState(false);
 
   async function handleStart() {
     setBusy(true);
-    setMessage(null);
     try {
       const data = await api.startStream();
       setStatus(data);
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     } finally {
       setBusy(false);
     }
@@ -78,7 +78,7 @@ const StreamHeroPanel = ({
       const data = await api.stopStream();
       setStatus(data);
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     } finally {
       setBusy(false);
     }
@@ -159,7 +159,7 @@ const StreamHeroPanel = ({
                   try {
                     await api.saveSettings({ loopPlaylist });
                   } catch (err) {
-                    setMessage({ type: 'error', text: err.message });
+                    showAlert({ severity: 'error', message: err.message });
                   }
                 }}
                 label={'Playlist Loop aktivieren'}

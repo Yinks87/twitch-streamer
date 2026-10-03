@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import { api } from '../api';
+import { useAlert } from '../context/AlertContext';
 import Button from '../components/Button';
 
 function formatSize(bytes) {
@@ -16,7 +17,8 @@ function formatDate(iso) {
 }
 
 // Admin-only panel for the ffmpeg session logs written by streamManager.js.
-export default function LogsPanel({ userRole, setMessage }) {
+export default function LogsPanel({ userRole }) {
+  const { showAlert } = useAlert();
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [openFilename, setOpenFilename] = useState(null);
@@ -32,11 +34,11 @@ export default function LogsPanel({ userRole, setMessage }) {
       const data = await api.getLogFiles();
       setLogs(data.logs || []);
     } catch (err) {
-      setMessage?.({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     } finally {
       setLoading(false);
     }
-  }, [setMessage]);
+  }, [showAlert]);
 
   useEffect(() => {
     if (isAdmin) loadLogs();
@@ -56,7 +58,7 @@ export default function LogsPanel({ userRole, setMessage }) {
       const data = await api.getLogFile(filename);
       setContent(data.content);
     } catch (err) {
-      setMessage?.({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     } finally {
       setContentLoading(false);
     }
@@ -76,10 +78,10 @@ export default function LogsPanel({ userRole, setMessage }) {
         }
         setDeleting(false);
       } else {
-        setMessage?.({ type: 'error', text: 'Failed to delete log file.' });
+        showAlert({ severity: 'error', message: 'Failed to delete log file.' });
       }
     } catch (err) {
-      setMessage?.({ type: 'error', text: err.message });
+      showAlert({ severity: 'error', message: err.message });
     } finally {
       setDeleting(false);
     }

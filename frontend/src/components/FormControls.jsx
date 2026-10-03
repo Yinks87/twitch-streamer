@@ -2,7 +2,7 @@ import styled from '@emotion/styled';
 
 // Shared base look for native text/password inputs and selects (former global
 // `input[type='text'|'password'], select` rule in App.css).
-const baseFieldCss = `
+export const baseFieldCss = `
   background: var(--panel-raised);
   border: 1px solid var(--border);
   color: var(--text);

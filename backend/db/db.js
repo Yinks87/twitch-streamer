@@ -25,7 +25,24 @@ async function openDatabase() {
 export function getSettings() {
   const row = db
     .prepare(
-      'SELECT twitch_server, stream_key, playlist_source, alt_streamer, loop_playlist, video_bitrate_kbps, audio_bitrate_kbps, stream_fps, restart_interval_seconds, restart_delay_seconds, chat_messages_enabled, chat_messages, updated_at FROM settings WHERE id = 1',
+      `SELECT
+        twitch_server,
+        stream_key,
+        playlist_source,
+        alt_streamer,
+        loop_playlist,
+        video_bitrate_kbps,
+        audio_bitrate_kbps,
+        stream_fps,
+        restart_interval_seconds,
+        restart_delay_seconds,
+        chat_messages_enabled,
+        pin_message_enabled,
+        chat_messages,
+        max_storage_gb,
+        updated_at
+      FROM settings
+      WHERE id = 1`,
     )
     .get();
   return {
@@ -40,7 +57,9 @@ export function getSettings() {
     restartIntervalSeconds: row.restart_interval_seconds,
     restartDelaySeconds: row.restart_delay_seconds,
     chatMessagesEnabled: row.chat_messages_enabled === 1,
+    pinMessageEnabled: row.pin_message_enabled === 1,
     chatMessages: JSON.parse(row.chat_messages),
+    maxStorageGb: row.max_storage_gb,
     updatedAt: row.updated_at,
   };
 }
@@ -57,11 +76,29 @@ export function saveSettings({
   restartIntervalSeconds,
   restartDelaySeconds,
   chatMessagesEnabled,
+  pinMessageEnabled,
   chatMessages,
+  maxStorageGb,
 } = {}) {
   const cur = getSettings();
   db.prepare(
-    `UPDATE settings SET twitch_server = ?, stream_key = ?, playlist_source = ?, alt_streamer = ?, loop_playlist = ?, video_bitrate_kbps = ?, audio_bitrate_kbps = ?, stream_fps = ?, restart_interval_seconds = ?, restart_delay_seconds = ?, chat_messages_enabled = ?, chat_messages = ?, updated_at = datetime('now') WHERE id = 1`,
+    `UPDATE settings SET
+      twitch_server = ?,
+      stream_key = ?,
+      playlist_source = ?,
+      alt_streamer = ?,
+      loop_playlist = ?,
+      video_bitrate_kbps = ?,
+      audio_bitrate_kbps = ?,
+      stream_fps = ?,
+      restart_interval_seconds = ?,
+      restart_delay_seconds = ?,
+      chat_messages_enabled = ?,
+      pin_message_enabled = ?,
+      chat_messages = ?,
+      max_storage_gb = ?,
+      updated_at = datetime('now')
+    WHERE id = 1`,
   ).run(
     twitchServer ?? cur.twitchServer,
     streamKey ?? cur.streamKey,
@@ -86,7 +123,15 @@ export function saveSettings({
       : cur.chatMessagesEnabled
         ? 1
         : 0,
+    pinMessageEnabled !== undefined
+      ? pinMessageEnabled
+        ? 1
+        : 0
+      : cur.pinMessageEnabled
+        ? 1
+        : 0,
     JSON.stringify(chatMessages ?? cur.chatMessages),
+    maxStorageGb ?? cur.maxStorageGb,
   );
   return getSettings();
 }
@@ -240,6 +285,15 @@ export function getUserByAccessToken(accessToken) {
 // --- Playlist ---
 
 export function getPlaylist(sourceFilter) {
+  if (Array.isArray(sourceFilter)) {
+    if (sourceFilter.length === 0) return [];
+    const placeholders = sourceFilter.map(() => '?').join(',');
+    return db
+      .prepare(
+        `SELECT * FROM playlist WHERE source IN (${placeholders}) ORDER BY position ASC, id ASC`,
+      )
+      .all(...sourceFilter);
+  }
   if (sourceFilter && sourceFilter !== 'all') {
     return db
       .prepare(

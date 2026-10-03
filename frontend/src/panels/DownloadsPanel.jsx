@@ -2,15 +2,18 @@ import { useState } from 'react';
 import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import { useStatusContext } from '../context/StatusContext';
+import { useAlert } from '../context/AlertContext';
 import { api } from '../api';
 import Button from '../components/Button';
 
-export default function DownloadsPanel({ onAborted, setMessage }) {
+export default function DownloadsPanel({ onAborted }) {
   const { downloads } = useStatusContext();
+  const { showAlert } = useAlert();
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
   const visible = downloads.filter(
     (download) => !hiddenIds.has(download.entryId),
   );
+
   if (visible.length === 0) return null;
 
   async function handleAbort(entryId) {
@@ -19,7 +22,7 @@ export default function DownloadsPanel({ onAborted, setMessage }) {
       setHiddenIds((current) => new Set(current).add(entryId));
       await onAborted?.();
     } catch (error) {
-      setMessage({ type: 'error', text: error.message });
+      showAlert({ severity: 'error', message: error.message });
     }
   }
 
