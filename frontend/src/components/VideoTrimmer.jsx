@@ -35,6 +35,7 @@ export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, vid
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState(null);
+  const [queued, setQueued] = useState(false);
   const trackRef = useRef(null);
   const dragRef = useRef(null);
   const pollRef = useRef(null);
@@ -143,6 +144,7 @@ export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, vid
       try {
         const data = await api.getTrimProgress(videoName);
         if (typeof data.progress === 'number') setProgress(data.progress);
+        setQueued(Boolean(data.queued));
       } catch {
         // keep showing the last known percentage if a poll request fails
       }
@@ -156,6 +158,7 @@ export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, vid
       clearInterval(pollRef.current);
       setSaving(false);
       setProgress(null);
+      setQueued(false);
     }
   }
 
@@ -174,7 +177,9 @@ export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, vid
         }}
       >
         <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-          Video wird geschnitten… das kann je nach Länge einen Moment dauern.
+          {queued
+            ? 'Ein anderer Schnitt läuft gerade – dieser startet automatisch danach…'
+            : 'Video wird geschnitten… das kann je nach Länge einen Moment dauern.'}
         </div>
         <div
           style={{
@@ -194,7 +199,7 @@ export default function VideoTrimmer({ duration, mutedSegments = [], onTrim, vid
           />
         </div>
         <div style={{ marginTop: '0.25rem', fontSize: '0.72rem', opacity: 0.55 }}>
-          {percent != null ? `${percent.toFixed(1)}%` : 'Starte…'}
+          {percent != null ? `${percent.toFixed(1)}%` : queued ? 'Wartet…' : 'Starte…'}
         </div>
       </div>
     );

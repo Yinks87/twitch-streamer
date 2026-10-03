@@ -32,6 +32,11 @@ const FFPROBE_PATH = FFMPEG_PATH.replace(
 const generatingThumbs = new Set();
 // filename → percent (0-100) while a trim is re-encoding; absent once finished.
 const trimProgress = new Map();
+// Serializes trims: each job chains onto this promise.
+let trimQueueTail = Promise.resolve();
+// Filenames with a trim queued or running / only those still waiting for their turn.
+const trimsActive = new Set();
+const trimsWaiting = new Set();
 // filename → Set of open read streams serving /stream requests, so a trim can
 // force-close stale handles that would otherwise keep Windows from renaming over the file.
 const activeStreamReaders = new Map();
@@ -337,9 +342,40 @@ videosRouter.put('/videos/:name/transcript', (req, res) => {
 // Cuts the given ranges (seconds, absolute to the current file) out of a video with
 // ffmpeg, re-encodes the remaining parts together, and replaces the original file —
 // the destructive confirmation happens client-side before this is ever called.
+// Only one re-encode runs at a time so the machine isn't overloaded; further requests
+// wait in a queue and start as soon as the previous one has finished.
 videosRouter.post('/videos/:name/trim', async (req, res) => {
   const name = path.basename(req.params.name);
   const filePath = path.join(VIDEOS_DIR, name);
+  if (!fs.existsSync(filePath))
+    return res.status(404).json({ error: 'File not found' });
+
+  // The queued segments refer to the current timeline, so a second cut of the same
+  // file must wait until the first one has replaced it.
+  if (trimsActive.has(name))
+    return res.status(409).json({
+      error: 'Für dieses Video läuft oder wartet bereits ein Schnitt.',
+    });
+
+  trimsActive.add(name);
+  trimsWaiting.add(name);
+  const job = trimQueueTail.then(() => {
+    trimsWaiting.delete(name);
+    return runTrim(name, filePath, req, res);
+  });
+  trimQueueTail = job.catch(() => {});
+  try {
+    await job;
+  } catch (err) {
+    if (!res.headersSent)
+      res.status(500).json({ error: `Schnitt fehlgeschlagen: ${err.message}` });
+  } finally {
+    trimsWaiting.delete(name);
+    trimsActive.delete(name);
+  }
+});
+
+async function runTrim(name, filePath, req, res) {
   if (!fs.existsSync(filePath))
     return res.status(404).json({ error: 'File not found' });
 
@@ -541,13 +577,13 @@ videosRouter.post('/videos/:name/trim', async (req, res) => {
 
   trimProgress.delete(name);
   res.json({ transcript: updatedTranscript });
-});
+}
 
 // Polled by the frontend while a trim is running to render a percentage.
 videosRouter.get('/videos/:name/trim-progress', (req, res) => {
   const name = path.basename(req.params.name);
   const progress = trimProgress.has(name) ? trimProgress.get(name) : null;
-  res.json({ progress });
+  res.json({ progress, queued: trimsWaiting.has(name) });
 });
 
 videosRouter.delete('/videos/:name', (req, res) => {

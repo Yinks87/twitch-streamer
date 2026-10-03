@@ -135,28 +135,8 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
     }
     const role = isPermittedUser ? 'broadcaster' : existingUser.role;
 
-    if (!existingUser) {
-      db.upsertUser({
-        twitchUserId: twitchUser.id,
-        login: twitchUser.login,
-        displayName: twitchUser.display_name,
-        accessToken: access_token,
-        refreshToken: refresh_token,
-        tokenExpiresAt,
-        broadcasterType: twitchUser.broadcaster_type,
-        profileImageUrl: twitchUser.profile_image_url,
-        role,
-      });
-    }
-
-    // Auto-save stream key to settings
-    if (role === 'broadcaster') {
-      const streamKey = await getStreamKey();
-      db.saveSettings({ streamKey });
-      connectToTwitchEventSubs();
-    }
-
-    // Persist user and create session
+    // Persist user and create session. The fresh tokens have to be stored before
+    // anything below (stream key, EventSub) reads the user from the DB.
     const sessionToken = crypto.randomBytes(32).toString('hex');
     db.upsertUser({
       twitchUserId: twitchUser.id,
@@ -170,6 +150,24 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
       role,
       sessionToken,
     });
+
+    if (role === 'broadcaster') {
+      // upsertUser keeps the stored role of existing users, so promote explicitly.
+      db.db
+        .prepare(
+          "UPDATE users SET role = 'broadcaster' WHERE twitch_user_id = ? AND role != 'broadcaster'",
+        )
+        .run(twitchUser.id);
+
+      // Runs in the background (it reconnects forever); a failure must not break the login.
+      connectToTwitchEventSubs().catch((err) =>
+        console.error(`[EVENTSUB] Connection after login failed: ${err.message}`),
+      );
+
+      // Auto-save stream key to settings
+      const streamKey = await getStreamKey();
+      db.saveSettings({ streamKey });
+    }
 
     setSessionCookie(res, sessionToken);
     res.redirect(successUrl);

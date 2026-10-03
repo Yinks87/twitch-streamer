@@ -29,13 +29,29 @@ export async function validateAndProceed(access_token, callback) {
   return await callback(validToken);
 }
 
-export async function doTokenValidationProcess({ access_token }) {
+// Refresh tokens are single-use, so concurrent validations of the same user
+// (e.g. parallel EventSub subscriptions) must share one in-flight run.
+const tokenValidationsInFlight = new Map();
+
+export function doTokenValidationProcess({ access_token }) {
   const user = db.getUserByAccessToken(access_token);
 
   if (!user) {
-    throw new Error('User not found for the provided access token.');
+    return Promise.reject(
+      new Error('User not found for the provided access token.'),
+    );
   }
 
+  if (!tokenValidationsInFlight.has(user.id)) {
+    const run = runTokenValidation(user, access_token).finally(() => {
+      tokenValidationsInFlight.delete(user.id);
+    });
+    tokenValidationsInFlight.set(user.id, run);
+  }
+  return tokenValidationsInFlight.get(user.id);
+}
+
+async function runTokenValidation(user, access_token) {
   const validAccessToken = await validateAccessToken(access_token);
   if (validAccessToken) {
     return { access_token, success: true };

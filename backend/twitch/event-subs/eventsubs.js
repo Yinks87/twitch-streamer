@@ -17,8 +17,35 @@ let ws = null;
 let heartbeatInterval = null;
 let lastKeepAliveMessage = Date.now();
 let reconnecting = false;
+// Incremented on every (re)start so a superseded connection loop stops itself.
+let connectionGeneration = 0;
+let wakeConnectionLoop = null;
 
 const { TWITCH_CLIENT_ID } = config;
+
+// Always reads the broadcaster from the DB and validates/refreshes its token,
+// because the stored tokens change whenever a login or the validation loop refreshes them.
+async function getBroadcasterWithValidToken() {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const bc = db.getBroadcasterUser();
+    if (!bc?.access_token) {
+      throw new Error('Missing broadcaster credentials.');
+    }
+    try {
+      await doTokenValidationProcess({ access_token: bc.access_token });
+      // The validation may have stored a refreshed token, so re-read the row.
+      const fresh = db.getBroadcasterUser();
+      if (!fresh?.access_token) {
+        throw new Error('Missing broadcaster credentials.');
+      }
+      return fresh;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
 
 // Main entry
 export async function connectToTwitchEventSubs() {
@@ -31,32 +58,33 @@ export async function connectToTwitchEventSubs() {
     return;
   }
 
-  const channelLogin = bc.login;
-
-  if (!channelLogin) {
+  if (!bc.login) {
     console.error(
       '[EVENTSUB] No Twitch channel configured. Skipping EventSub connection.',
     );
     return;
   }
 
+  const generation = ++connectionGeneration;
+  const isCurrent = () => reconnecting && generation === connectionGeneration;
+
   await cleanupWebSocket();
   reconnecting = true;
 
-  while (reconnecting) {
+  while (isCurrent()) {
     try {
       console.log(
         '[EVENTSUB] Attempting to connect to Twitch EventSub WebSocket...',
       );
-      await connectOnce(bc);
+      await connectOnce();
       await waitForSocketExit();
     } catch (err) {
       console.error(`[EVENTSUB] Connection failed: ${err.message}`);
     } finally {
-      await cleanupWebSocket();
+      if (generation === connectionGeneration) await cleanupWebSocket();
     }
 
-    if (!reconnecting) {
+    if (!isCurrent()) {
       break;
     }
 
@@ -68,7 +96,7 @@ export async function connectToTwitchEventSubs() {
 }
 
 // One connection attempt
-async function connectOnce(bc) {
+async function connectOnce() {
   return new Promise((resolve, reject) => {
     ws = new WebSocket(WS_ENDPOINT);
     let settled = false;
@@ -95,7 +123,7 @@ async function connectOnce(bc) {
     });
 
     ws.on('message', (data) => {
-      processMessage(data, bc).catch((err) => {
+      processMessage(data).catch((err) => {
         console.error(`Failed to process EventSub message: ${err.message}`);
       });
     });
@@ -134,10 +162,22 @@ async function cleanupWebSocket() {
     }
     ws = null;
   }
+  // The removed listeners can no longer signal the loop, so wake it explicitly.
+  wakeConnectionLoop?.();
 }
 
 // Subscription logic
-export async function subscribeToChannelEvents(bc, sessionId) {
+export async function subscribeToChannelEvents(sessionId) {
+  let bc;
+  try {
+    bc = await getBroadcasterWithValidToken();
+  } catch (err) {
+    console.error(
+      `[EVENTSUB] Token validation failed, cannot subscribe: ${err.message}`,
+    );
+    return { success: false };
+  }
+
   const channelName = bc.login;
 
   if (!channelName) {
@@ -205,8 +245,6 @@ async function subscribeToEvent(bc, type, version, condition, sessionId) {
     },
   };
 
-  await doTokenValidationProcess({ access_token: bc.access_token });
-
   for (let attempt = 1; attempt <= SUBSCRIBE_RETRY_ATTEMPTS; attempt += 1) {
     try {
       const response = await fetch(SUBSCRIPTIONS_ENDPOINT, {
@@ -263,7 +301,7 @@ function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-async function processMessage(rawMessage, bc) {
+async function processMessage(rawMessage) {
   const message = safeJsonParse(rawMessage);
   if (!message) {
     return;
@@ -285,7 +323,7 @@ async function processMessage(rawMessage, bc) {
         console.error('[EVENTSUB] Missing session ID in welcome payload.');
         return;
       }
-      await subscribeToChannelEvents(bc, sessionId);
+      await subscribeToChannelEvents(sessionId);
       return;
     }
     case 'session_reconnect':
@@ -348,9 +386,11 @@ async function waitForSocketExit() {
 
   await new Promise((resolve) => {
     const finalize = () => {
+      wakeConnectionLoop = null;
       resolve();
     };
 
+    wakeConnectionLoop = finalize;
     ws.once('close', finalize);
     ws.once('error', finalize);
   });
