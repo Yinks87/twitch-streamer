@@ -173,7 +173,7 @@ const StreamHeroPanel = ({
               <Checkbox
                 checked={!!settings.shuffleMode}
                 disabled={status.running}
-                title="Mischt die Playlist bei jedem Stream-Start oder bei jedem neuen Loop Beginn."
+                title="Shuffle die Playlist bei jedem Stream-Start oder bei jedem neuen Loop Beginn."
                 onChange={async (e) => {
                   const shuffleMode = e.target.checked;
                   setSettings((s) => ({ ...s, shuffleMode }));
@@ -183,7 +183,7 @@ const StreamHeroPanel = ({
                     showAlert({ severity: 'error', message: err.message });
                   }
                 }}
-                label="Playlist mischen"
+                label="Playlist shufflen"
               />
             </LoopToggle>
             {status.running ? (
