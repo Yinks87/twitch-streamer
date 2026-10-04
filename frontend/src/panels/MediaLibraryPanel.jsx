@@ -417,10 +417,22 @@ export default function MediaLibraryPanel({
       ? item.importStatus === 'ready'
       : item.importStatus !== 'ready');
 
+  const [videoStatusFilter, setVideoStatusFilter] = useState('all'); // 'all' | 'active' | 'inactive' | 'incomplete'
+
+  const matchesVideoStatus = (video) => {
+    if (videoStatusFilter === 'all') return true;
+    const entry = playlist.find((e) => e.filename === video.name);
+    const active = Boolean(entry?.enabled && !entry?.needsCategory);
+    if (videoStatusFilter === 'active') return active;
+    if (videoStatusFilter === 'inactive') return !active;
+    return videoNeedsCategory(video.transcript);
+  };
+
   const visibleVideos = videos
     .filter(
       (video) => videoTypeFilter === 'all' || video.source === videoTypeFilter,
     )
+    .filter(matchesVideoStatus)
     .slice()
     .sort((a, b) => {
       const diff = new Date(a.uploadedAt) - new Date(b.uploadedAt);
@@ -526,10 +538,19 @@ export default function MediaLibraryPanel({
               value={videoTypeFilter}
               onChange={(e) => setVideoTypeFilter(e.target.value)}
             >
-              <option value="all">Alle</option>
+              <option value="all">Typ: Alle</option>
               <option value="upload">Uploads</option>
               <option value="vod">VODs</option>
               <option value="clip">Clips</option>
+            </Select>
+            <Select
+              value={videoStatusFilter}
+              onChange={(e) => setVideoStatusFilter(e.target.value)}
+            >
+              <option value="all">Status: Alle</option>
+              <option value="active">Aktiviert</option>
+              <option value="inactive">Deaktiviert</option>
+              <option value="incomplete">Transkript unvollständig</option>
             </Select>
             <Select
               value={videoSort}
