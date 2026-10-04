@@ -156,6 +156,7 @@ const StreamHeroPanel = ({
               <Checkbox
                 checked={!!settings.loopPlaylist}
                 disabled={status.running}
+                title="Wiederholt die Playlist endlos, solange der Stream läuft."
                 onChange={async (e) => {
                   const loopPlaylist = e.target.checked;
                   setSettings((s) => ({ ...s, loopPlaylist }));
@@ -172,6 +173,7 @@ const StreamHeroPanel = ({
               <Checkbox
                 checked={!!settings.shuffleMode}
                 disabled={status.running}
+                title="Mischt die Playlist bei jedem Stream-Start oder bei jedem neuen Loop Beginn."
                 onChange={async (e) => {
                   const shuffleMode = e.target.checked;
                   setSettings((s) => ({ ...s, shuffleMode }));
