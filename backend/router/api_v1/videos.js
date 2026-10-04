@@ -191,11 +191,17 @@ const videosRouter = express.Router();
 videosRouter.get('/videos', (req, res) => {
   const files = streamManager.listVideoFiles().map((name) => {
     const stat = fs.statSync(path.join(VIDEOS_DIR, name));
+    const transcript = readTranscript(name);
     return {
       name,
       size: stat.size,
       modifiedAt: stat.mtime,
-      transcript: readTranscript(name),
+      source: ['vod', 'clip'].includes(transcript?.source)
+        ? transcript.source
+        : 'upload',
+      // Legacy files without a stored timestamp fall back to the file's birth time.
+      uploadedAt: transcript?.uploadedAt || (stat.birthtime ?? stat.mtime),
+      transcript,
     };
   });
   res.json({ videos: files, storage: getStorageStatus() });
@@ -266,6 +272,7 @@ videosRouter.post(
       const meta = {
         originalName: f.originalname,
         source: 'upload',
+        uploadedAt: new Date().toISOString(),
         timestamps,
       };
       if (!timestamps[0]) timestamps[0] = firstTimestamp;

@@ -1,7 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import Button from './Button';
+import TimeInput from './TimeInput.jsx';
 import { api } from '../api';
 import { useAlert } from '../context/AlertContext';
+
+function timeToSeconds(time) {
+  const [h, m, s] = (time || '00:00:00').split(':').map(Number);
+  return (h || 0) * 3600 + (m || 0) * 60 + (s || 0);
+}
+
+function secondsToTime(totalSeconds) {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const h = String(Math.floor(total / 3600)).padStart(2, '0');
+  const m = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const s = String(total % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
 
 function formatDuration(totalSeconds) {
   const total = Math.max(0, Math.round(totalSeconds));
@@ -42,6 +56,9 @@ export default function VideoTrimmer({
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState(null);
   const [queued, setQueued] = useState(false);
+  const [manualStart, setManualStart] = useState('00:00:00');
+  const [manualEnd, setManualEnd] = useState('00:00:00');
+  const [hoverTime, setHoverTime] = useState(null);
   const trackRef = useRef(null);
   const dragRef = useRef(null);
   const savingRef = useRef(false);
@@ -95,9 +112,57 @@ export default function VideoTrimmer({
     return ratio * duration;
   }
 
+  function warnOverlap() {
+    showAlert({
+      severity: 'warning',
+      message: 'Schnitt-Markierungen dürfen sich nicht überschneiden.',
+    });
+  }
+
   function addRange(range) {
     if (range.end - range.start < 0.3) return;
+    if (cutRanges.some((r) => rangesOverlap(r, range))) {
+      warnOverlap();
+      return;
+    }
     setCutRanges((prev) => [...prev, range].sort((a, b) => a.start - b.start));
+  }
+
+  // Limits a drag so it stops at the nearest existing range instead of overlapping it.
+  function clampToFreeSpace(anchor, point) {
+    let clamped = point;
+    for (const r of cutRanges) {
+      if (point > anchor && r.start >= anchor) clamped = Math.min(clamped, r.start);
+      if (point < anchor && r.end <= anchor) clamped = Math.max(clamped, r.end);
+    }
+    return clamped;
+  }
+
+  function addManualRange() {
+    const start = timeToSeconds(manualStart);
+    const end = timeToSeconds(manualEnd);
+    if (end <= start || end - start < 0.3) {
+      showAlert({
+        severity: 'warning',
+        message: 'Die Endzeit muss nach der Startzeit liegen.',
+      });
+      return;
+    }
+    if (end > duration) {
+      showAlert({
+        severity: 'warning',
+        message: `Die Endzeit liegt hinter dem Videoende (${formatDuration(duration)}).`,
+      });
+      return;
+    }
+    const range = { start, end };
+    if (cutRanges.some((r) => rangesOverlap(r, range))) {
+      warnOverlap();
+      return;
+    }
+    addRange(range);
+    setManualStart(secondsToTime(end));
+    setManualEnd(secondsToTime(Math.min(duration, end + 60)));
   }
 
   function removeRange(index) {
@@ -114,6 +179,15 @@ export default function VideoTrimmer({
   }
 
   function toggleAllMutedRanges() {
+    if (
+      !allMutedRangesSelected &&
+      selectableMutedRanges.some(
+        (range) =>
+          !cutRanges.some((selected) => rangesEqual(selected, range)) &&
+          cutRanges.some((selected) => rangesOverlap(selected, range)),
+      )
+    )
+      warnOverlap();
     setCutRanges((current) => {
       if (
         selectableMutedRanges.length > 0 &&
@@ -129,7 +203,7 @@ export default function VideoTrimmer({
 
       const next = [...current];
       for (const range of selectableMutedRanges) {
-        if (!next.some((selected) => rangesEqual(selected, range))) {
+        if (!next.some((selected) => rangesOverlap(selected, range))) {
           next.push(range);
         }
       }
@@ -140,21 +214,30 @@ export default function VideoTrimmer({
   function handlePointerDown(e) {
     if (!hasDuration) return;
     const start = clientXToSeconds(e.clientX);
-    dragRef.current = { start, current: start };
+    if (cutRanges.some((r) => start > r.start && start < r.end)) {
+      warnOverlap();
+      return;
+    }
+    dragRef.current = { start, current: start, blocked: false };
     // force a re-render so the live preview block shows up
     setCutRanges((prev) => [...prev]);
   }
 
   function handlePointerMove(e) {
+    setHoverTime(clientXToSeconds(e.clientX));
     if (!dragRef.current) return;
-    dragRef.current.current = clientXToSeconds(e.clientX);
+    const raw = clientXToSeconds(e.clientX);
+    const clamped = clampToFreeSpace(dragRef.current.start, raw);
+    if (clamped !== raw) dragRef.current.blocked = true;
+    dragRef.current.current = clamped;
     setCutRanges((prev) => [...prev]);
   }
 
   function handlePointerUp() {
     if (!dragRef.current) return;
-    const { start, current } = dragRef.current;
+    const { start, current, blocked } = dragRef.current;
     dragRef.current = null;
+    if (blocked) warnOverlap();
     addRange({
       start: Math.min(start, current),
       end: Math.max(start, current),
@@ -287,6 +370,7 @@ export default function VideoTrimmer({
         onMouseMove={handlePointerMove}
         onMouseUp={handlePointerUp}
         onMouseLeave={() => {
+          setHoverTime(null);
           if (dragRef.current) handlePointerUp();
         }}
         style={{
@@ -354,6 +438,77 @@ export default function VideoTrimmer({
             }}
           />
         )}
+        {hoverTime != null && (
+          <>
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${(hoverTime / duration) * 100}%`,
+                width: '1px',
+                background: 'rgba(255,255,255,0.7)',
+                pointerEvents: 'none',
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '100%',
+                marginBottom: '4px',
+                left: `${(hoverTime / duration) * 100}%`,
+                transform: `translateX(${
+                  hoverTime / duration < 0.1
+                    ? '0'
+                    : hoverTime / duration > 0.9
+                      ? '-100%'
+                      : '-50%'
+                })`,
+                padding: '0.1rem 0.4rem',
+                borderRadius: '4px',
+                background: '#000',
+                color: '#fff',
+                fontFamily: 'monospace',
+                fontSize: '0.72rem',
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+                zIndex: 1,
+              }}
+            >
+              {liveDrag
+                ? `${secondsToTime(liveDrag.start)} – ${secondsToTime(liveDrag.end)}`
+                : secondsToTime(hoverTime)}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: '0.5rem',
+          marginTop: '0.5rem',
+          fontSize: '0.78rem',
+        }}
+      >
+        <span style={{ opacity: 0.75 }}>Von</span>
+        <TimeInput
+          value={manualStart}
+          onChange={setManualStart}
+          title="Start (hh:mm:ss)"
+        />
+        <span style={{ opacity: 0.75 }}>bis</span>
+        <TimeInput
+          value={manualEnd}
+          onChange={setManualEnd}
+          title="Ende (hh:mm:ss)"
+        />
+        <Button type="button" variant="ghost" onClick={addManualRange}>
+          <span className="material-symbols-outlined small">add</span>
+          Bereich hinzufügen
+        </Button>
       </div>
 
       {cutRanges.length > 0 && (

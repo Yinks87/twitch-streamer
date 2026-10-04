@@ -82,7 +82,7 @@ function PlayerPageContent() {
   const fileInputRef = useRef(null);
   const [editingVideo, setEditingVideo] = useState(null); // { name, transcript }
 
-  const [libraryTab, setLibraryTab] = useState('uploads'); // 'uploads' | 'vods' | 'clips'
+  const [libraryTab, setLibraryTab] = useState('videos'); // 'videos' | 'uploads' | 'vods' | 'clips'
   const [vods, setVods] = useState([]);
   const [vodsLoading, setVodsLoading] = useState(false);
   const [vodsPagination, setVodsPagination] = useState(null);
@@ -590,7 +590,16 @@ function PlayerPageContent() {
       </ConsoleGrid>
 
       {/* ── Active downloads ──────────────────────────────────────────────────── */}
-      <DownloadsPanelFile onAborted={loadPlaylist} />
+      <DownloadsPanelFile
+        onAborted={() =>
+          Promise.all([
+            loadPlaylist(),
+            loadVideos(),
+            loadVods(undefined, true),
+            loadClips(undefined, true),
+          ]).catch(() => {})
+        }
+      />
 
       {/* ── Playlist ─────────────────────────────────────────────────────────── */}
       <PlaylistPanel

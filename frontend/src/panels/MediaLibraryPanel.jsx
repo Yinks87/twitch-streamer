@@ -155,6 +155,18 @@ function ImportStatusButton({ status, onImport }) {
   );
 }
 
+function ImportFilterSelect({ value, onChange }) {
+  return (
+    <Select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="all">Status: Alle</option>
+      <option value="imported">Status: Importiert</option>
+      <option value="not_imported">Status: Nicht importiert</option>
+    </Select>
+  );
+}
+
+const SOURCE_LABELS = { upload: 'Upload', vod: 'VOD', clip: 'Clip' };
+
 // ── One uploaded video: collapsed row / expanded transcript editor ───────────
 function MediaLibraryItem({
   video,
@@ -284,6 +296,8 @@ function MediaLibraryItem({
         <ItemBody>
           <ItemMeta>
             <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>
+              {SOURCE_LABELS[video.source] || 'Upload'} ·{' '}
+              {new Date(video.uploadedAt).toLocaleString('de-DE')} ·{' '}
               {playlistEntry
                 ? isActive
                   ? 'Aktiv in der Playlist'
@@ -393,7 +407,30 @@ export default function MediaLibraryPanel({
     setClips([]);
   }
 
+  const [videoSort, setVideoSort] = useState('desc'); // 'desc' | 'asc'
+  const [videoTypeFilter, setVideoTypeFilter] = useState('all'); // 'all' | 'upload' | 'vod' | 'clip'
+  const [importFilter, setImportFilter] = useState('all'); // 'all' | 'imported' | 'not_imported'
+
+  const matchesImportFilter = (item) =>
+    importFilter === 'all' ||
+    (importFilter === 'imported'
+      ? item.importStatus === 'ready'
+      : item.importStatus !== 'ready');
+
+  const visibleVideos = videos
+    .filter(
+      (video) => videoTypeFilter === 'all' || video.source === videoTypeFilter,
+    )
+    .slice()
+    .sort((a, b) => {
+      const diff = new Date(a.uploadedAt) - new Date(b.uploadedAt);
+      return videoSort === 'asc' ? diff : -diff;
+    });
+
+  const visibleVods = vods.filter(matchesImportFilter);
+
   const visibleClips = clips
+    .filter(matchesImportFilter)
     .filter((clip) =>
       clipCreatorFilter.trim()
         ? clip.creator_name
@@ -412,22 +449,28 @@ export default function MediaLibraryPanel({
     <CollapsiblePanel storageKey="library" title="Medienbibliothek">
       <Tabs>
         <Button
+          variant={libraryTab === 'videos' ? 'primary' : 'ghost'}
+          onClick={() => setLibraryTab('videos')}
+        >
+          Alle Videos ({videos.length})
+        </Button>
+        <Button
           variant={libraryTab === 'uploads' ? 'primary' : 'ghost'}
           onClick={() => setLibraryTab('uploads')}
         >
-          Uploads ({videos.length})
+          Upload
         </Button>
         <Button
           variant={libraryTab === 'vods' ? 'primary' : 'ghost'}
           onClick={() => setLibraryTab('vods')}
         >
-          Twitch VODs
+          VODs
         </Button>
         <Button
           variant={libraryTab === 'clips' ? 'primary' : 'ghost'}
           onClick={() => setLibraryTab('clips')}
         >
-          Twitch Clips
+          Clips
         </Button>
       </Tabs>
 
@@ -443,7 +486,9 @@ export default function MediaLibraryPanel({
 
       {libraryTab === 'uploads' && (
         <>
-          <Hint>Dateien werden in der Playlist-Reihenfolge gestreamt.</Hint>
+          <Hint>
+            Videos hochladen, um sie anschließend in der Mediathek zu verwalten.
+          </Hint>
           <Dropzone
             $active={dragOver}
             onDragOver={(e) => {
@@ -470,12 +515,39 @@ export default function MediaLibraryPanel({
               {uploading ? 'Lade hoch…' : 'Videos hierher ziehen oder klicken'}
             </p>
           </Dropzone>
+        </>
+      )}
 
+      {libraryTab === 'videos' && (
+        <>
+          <Hint>Filtern und sortieren</Hint>
+          <SourceRow>
+            <Select
+              value={videoTypeFilter}
+              onChange={(e) => setVideoTypeFilter(e.target.value)}
+            >
+              <option value="all">Alle</option>
+              <option value="upload">Uploads</option>
+              <option value="vod">VODs</option>
+              <option value="clip">Clips</option>
+            </Select>
+            <Select
+              value={videoSort}
+              onChange={(e) => setVideoSort(e.target.value)}
+            >
+              <option value="desc">Datum: Neueste zuerst</option>
+              <option value="asc">Datum: Älteste zuerst</option>
+            </Select>
+          </SourceRow>
           <ItemList>
-            {videos.length === 0 && (
-              <VideoListEmpty>Noch keine Videos vorhanden.</VideoListEmpty>
+            {visibleVideos.length === 0 && (
+              <VideoListEmpty>
+                {videos.length === 0
+                  ? 'Noch keine Videos in der Mediathek vorhanden.'
+                  : 'Keine Videos für diesen Filter.'}
+              </VideoListEmpty>
             )}
-            {videos.map((video) => (
+            {visibleVideos.map((video) => (
               <MediaLibraryItem
                 key={video.name}
                 video={video}
@@ -509,21 +581,28 @@ export default function MediaLibraryPanel({
             }
             otherHint={
               <>
-                VODs von {vodUserLogin} "Importieren" lädt sie per yt-dlp
+                VODs von {vodUserLogin} "Importieren" - lädt sie per yt-dlp
                 herunter.
               </>
             }
             promptHint={<>Benutzernamen eingeben und "Laden" klicken.</>}
           />
 
+          <SourceRow>
+            <ImportFilterSelect
+              value={importFilter}
+              onChange={setImportFilter}
+            />
+          </SourceRow>
+
           {vodSource === 'other' && !vodUserLogin ? null : vodsLoading &&
             vods.length === 0 ? (
             <p style={{ opacity: 0.6 }}>Lade VODs…</p>
-          ) : vods.length === 0 ? (
+          ) : visibleVods.length === 0 ? (
             <p style={{ opacity: 0.6 }}>Keine Aufzeichnungen gefunden.</p>
           ) : (
             <VideoList>
-              {vods.map((vod) => {
+              {visibleVods.map((vod) => {
                 const thumbUrl = vod.thumbnail_url
                   ?.replace(/%?\{width\}/g, '320')
                   ?.replace(/%?\{height\}/g, '180');
@@ -641,6 +720,10 @@ export default function MediaLibraryPanel({
               <option value="date">Sortierung: Datum (neueste zuerst)</option>
               <option value="views">Sortierung: Aufrufe (meiste zuerst)</option>
             </Select>
+            <ImportFilterSelect
+              value={importFilter}
+              onChange={setImportFilter}
+            />
             <Input
               type="text"
               placeholder="Nach Clip-Ersteller filtern…"
@@ -739,6 +822,7 @@ export default function MediaLibraryPanel({
 
 const Tabs = styled.div`
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
 `;

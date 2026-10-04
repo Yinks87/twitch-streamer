@@ -259,6 +259,7 @@ async function importRemoteVideo(
   const meta = {
     source: kind,
     vodId: remoteId,
+    uploadedAt: new Date().toISOString(),
     ...(mutedSegments ? { mutedSegments } : {}),
     timestamps: [
       {
@@ -292,6 +293,8 @@ async function importRemoteVideo(
   const ffmpegDir = path.dirname(FFMPEG_PATH);
   const ytdlpArgs = [
     '--no-playlist',
+    '-N',
+    '8',
     '-f',
     'bestvideo+bestaudio/best',
     '--merge-output-format',

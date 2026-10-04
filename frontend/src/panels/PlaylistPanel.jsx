@@ -45,7 +45,9 @@ export default function PlaylistPanel({
     >
       <Hint>
         Aktive Playlist basierend auf der Quellenauswahl „{sourceLabel}".
-        Einträge können einzeln deaktiviert werden.
+        Einträge können einzeln deaktiviert werden. Die Reihenfolge der Playlist
+        kann per Drag & Drop geändert werden, die Wiedergabe entspricht der
+        Playlist-Reihenfolge.
       </Hint>
       <VideoList>
         {readyPlaylist.length === 0 && (
@@ -148,7 +150,8 @@ const SourceBadge = styled.span`
   font-size: 0.7rem;
   padding: 0.1rem 0.35rem;
   border-radius: 3px;
-  background: ${({ $kind }) => (BADGE_COLORS[$kind] ? `${BADGE_COLORS[$kind]}22` : '#00000022')};
+  background: ${({ $kind }) =>
+    BADGE_COLORS[$kind] ? `${BADGE_COLORS[$kind]}22` : '#00000022'};
   color: ${({ $kind }) => BADGE_COLORS[$kind] ?? 'inherit'};
   flex-shrink: 0;
 `;
