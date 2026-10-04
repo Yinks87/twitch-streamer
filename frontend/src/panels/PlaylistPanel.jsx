@@ -46,8 +46,8 @@ export default function PlaylistPanel({
       <Hint>
         Aktive Playlist basierend auf der Quellenauswahl „{sourceLabel}".
         Einträge können einzeln deaktiviert werden. Die Reihenfolge der Playlist
-        kann per Drag & Drop geändert werden, die Wiedergabe entspricht der
-        Playlist-Reihenfolge.
+        kann per Drag & Drop geändert werden. Bei inaktivem Shuffle wird die Playlist der 
+        Reihenfolge nach abgespielt.
       </Hint>
       <VideoList>
         {readyPlaylist.length === 0 && (

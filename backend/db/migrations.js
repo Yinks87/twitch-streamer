@@ -19,6 +19,7 @@ const migrations = [
           loop_playlist   INTEGER NOT NULL DEFAULT 1,
           chat_messages_enabled   INTEGER NOT NULL DEFAULT 1,
           max_storage_gb    INTEGER NOT NULL DEFAULT 500,
+          shuffle_mode       INTEGER NOT NULL DEFAULT 0,
           pin_message_enabled INTEGER NOT NULL DEFAULT 1,
           chat_messages           TEXT NOT NULL DEFAULT '{"currentVideo":"Aktueller Titel: \\"\${title}\\" in der Kategorie: \\"\${category}\\"","restartMessage":"Stream wird in \${duration}s neu gestartet", "pinMessage":"24/7 VOD Channel! Für Live Content folgt meinem Main Twitch Channel!"}',
           video_bitrate_kbps INTEGER NOT NULL DEFAULT 6000,
@@ -60,6 +61,20 @@ const migrations = [
           created_at TEXT    NOT NULL DEFAULT (datetime('now'))
         );
       `);
+    },
+  },
+  {
+    version: 2,
+    name: 'add_shuffle_mode',
+    up: (db) => {
+      const settingColumns = db
+        .prepare('PRAGMA table_info(settings)') // Get the table info for the settings table
+        .all()
+        .map((column) => column.name);
+      if (!settingColumns.includes('shuffle_mode')) // Add the max_storage_gb column if it doesn't exist
+        db.exec(
+          'ALTER TABLE settings ADD COLUMN shuffle_mode INTEGER NOT NULL DEFAULT 0',
+        );
     },
   },
 

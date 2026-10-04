@@ -152,14 +152,6 @@ streamEvents.on('videoChanged', async (filename, context = {}) => {
         chatMessagesEnabled = settings?.chatMessagesEnabled;
         pinMessageEnabled = settings?.pinMessageEnabled;
         chatMessages = settings?.chatMessages;
-        if (pinMessageEnabled) {
-          await sendChatMessage({
-            access_token: user.access_token,
-            sender_id: user.twitch_user_id,
-            broadcaster_id: user.twitch_user_id,
-            message: chatMessages.pinMessage,
-          });
-        }
 
         if (chatMessagesEnabled) {
           await sendChatMessage({
@@ -199,14 +191,6 @@ streamEvents.on('videoChanged', async (filename, context = {}) => {
           pinMessageEnabled = settings?.pinMessageEnabled;
           chatMessages = settings?.chatMessages;
 
-          if (pinMessageEnabled) {
-            await sendChatMessage({
-              access_token: freshUser.access_token,
-              sender_id: freshUser.twitch_user_id,
-              broadcaster_id: freshUser.twitch_user_id,
-              message: chatMessages.pinMessage,
-            });
-          }
           if (chatMessagesEnabled) {
             await sendChatMessage({
               access_token: freshUser.access_token,

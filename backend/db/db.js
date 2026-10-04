@@ -31,6 +31,7 @@ export function getSettings() {
         playlist_source,
         alt_streamer,
         loop_playlist,
+        shuffle_mode,
         video_bitrate_kbps,
         audio_bitrate_kbps,
         stream_fps,
@@ -51,6 +52,7 @@ export function getSettings() {
     playlistSource: row.playlist_source,
     altStreamer: row.alt_streamer,
     loopPlaylist: row.loop_playlist === 1,
+    shuffleMode: row.shuffle_mode === 1,
     videoBitrateKbps: row.video_bitrate_kbps,
     audioBitrateKbps: row.audio_bitrate_kbps,
     streamFps: row.stream_fps,
@@ -70,6 +72,7 @@ export function saveSettings({
   playlistSource,
   altStreamer,
   loopPlaylist,
+  shuffleMode,
   videoBitrateKbps,
   audioBitrateKbps,
   streamFps,
@@ -88,6 +91,7 @@ export function saveSettings({
       playlist_source = ?,
       alt_streamer = ?,
       loop_playlist = ?,
+      shuffle_mode = ?,
       video_bitrate_kbps = ?,
       audio_bitrate_kbps = ?,
       stream_fps = ?,
@@ -109,6 +113,13 @@ export function saveSettings({
         ? 1
         : 0
       : cur.loopPlaylist
+        ? 1
+        : 0,
+    shuffleMode !== undefined
+      ? shuffleMode
+        ? 1
+        : 0
+      : cur.shuffleMode
         ? 1
         : 0,
     videoBitrateKbps ?? cur.videoBitrateKbps,

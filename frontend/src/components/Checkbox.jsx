@@ -6,6 +6,7 @@ const Checkbox = ({
   label,
   size = 'medium',
   variant = 'primary',
+  disabled = false
 }) => (
   <label
     style={{
@@ -23,6 +24,7 @@ const Checkbox = ({
       type="checkbox"
       checked={checked}
       onChange={onChange}
+      disabled={disabled}
     />
     {label}
   </label>

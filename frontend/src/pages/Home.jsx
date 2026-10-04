@@ -32,6 +32,12 @@ const VOD_STATUS_LABEL = {
 };
 
 const PRIVILEGED_ROLES = ['admin', 'broadcaster'];
+const PLAYLIST_CHANGE_NOTICE_KEY = 'twitch-streamer.playlist-change-pending';
+const STREAM_PLAYLIST_SIGNATURE_KEY = 'twitch-streamer.stream-playlist-signature';
+
+function getPlaylistSignature(playlist) {
+  return playlist.map((entry) => entry.id).join(',');
+}
 
 export default function Home() {
   return <PlayerPageContent />;
@@ -68,6 +74,7 @@ function PlayerPageContent() {
     streamKey: '',
     playlistSource: 'all',
     loopPlaylist: true,
+    shuffleMode: true,
     videoBitrateKbps: 6000,
     audioBitrateKbps: 128,
     streamFps: 60,
@@ -98,6 +105,10 @@ function PlayerPageContent() {
   const [clipCreatorFilter, setClipCreatorFilter] = useState('');
 
   const [playlist, setPlaylist] = useState([]);
+  const [playlistChangePending, setPlaylistChangePending] = useState(
+    () => window.localStorage.getItem(PLAYLIST_CHANGE_NOTICE_KEY) === 'true',
+  );
+  const playlistRequestRef = useRef(0);
   const [draggedPlaylistId, setDraggedPlaylistId] = useState(null);
   const [dragOverPlaylistId, setDragOverPlaylistId] = useState(null);
 
@@ -130,9 +141,36 @@ function PlayerPageContent() {
   }, []);
 
   const loadPlaylist = useCallback(async () => {
+    const requestId = ++playlistRequestRef.current;
     const data = await api.getPlaylist();
+    if (requestId !== playlistRequestRef.current) return;
+    const signature = getPlaylistSignature(data.playlist);
+    let streamPlaylistSignature = window.localStorage.getItem(
+      STREAM_PLAYLIST_SIGNATURE_KEY,
+    );
+    if (streamPlaylistSignature === null) {
+      streamPlaylistSignature = signature;
+      window.localStorage.setItem(
+        STREAM_PLAYLIST_SIGNATURE_KEY,
+        streamPlaylistSignature,
+      );
+    }
+    const changePending = signature !== streamPlaylistSignature;
+    window.localStorage.setItem(
+      PLAYLIST_CHANGE_NOTICE_KEY,
+      String(changePending),
+    );
+    setPlaylistChangePending(changePending);
     setPlaylist(data.playlist);
   }, []);
+
+  function handleStreamStarted() {
+    playlistRequestRef.current += 1;
+    const signature = getPlaylistSignature(playlist);
+    window.localStorage.setItem(STREAM_PLAYLIST_SIGNATURE_KEY, signature);
+    window.localStorage.setItem(PLAYLIST_CHANGE_NOTICE_KEY, 'false');
+    setPlaylistChangePending(false);
+  }
 
   const loadVods = useCallback(
     async (after, silent = false) => {
@@ -546,6 +584,8 @@ function PlayerPageContent() {
           setSettings={setSettings}
           readyPlaylist={readyPlaylist}
           userRole={user.role}
+          playlistChangePending={playlistChangePending}
+          onStreamStarted={handleStreamStarted}
         />
 
         <MediaLibraryPanel

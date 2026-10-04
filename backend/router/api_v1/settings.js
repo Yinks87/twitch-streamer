@@ -21,6 +21,7 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     playlistSource,
     altStreamer,
     loopPlaylist,
+    shuffleMode,
     videoBitrateKbps,
     audioBitrateKbps,
     streamFps,
@@ -98,6 +99,8 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     return res
       .status(400)
       .json({ error: 'pinMessageEnabled must be a boolean' });
+  if (shuffleMode !== undefined && typeof shuffleMode !== 'boolean')
+    return res.status(400).json({ error: 'shuffleMode must be a boolean' });
   if (
     maxStorageGb !== undefined &&
     (!Number.isInteger(maxStorageGb) || maxStorageGb < 1 || maxStorageGb > 100000)
@@ -111,6 +114,7 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     playlistSource,
     altStreamer,
     loopPlaylist,
+    shuffleMode,
     videoBitrateKbps,
     audioBitrateKbps,
     streamFps,

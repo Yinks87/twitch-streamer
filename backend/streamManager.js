@@ -235,14 +235,14 @@ export function listVideoFiles() {
 
 // Builds the ffmpeg concat playlist string from the DB — no file written.
 function buildPlaylistContent() {
-  const { playlistSource } = db.getSettings();
+  const { playlistSource, shuffleMode } = db.getSettings();
   const filter =
     playlistSource === 'all'
       ? null
       : playlistSource === 'uploads_only'
         ? 'upload'
         : ['vod', 'clip'];
-  const entries = db
+  let entries = db
     .getPlaylist(filter)
     .filter(
       (e) =>
@@ -259,6 +259,17 @@ function buildPlaylistContent() {
           ? 'No uploaded videos in the playlist. Upload a file first.'
           : 'Playlist is empty. Upload a video, import a VOD/clip, or complete a transcript missing its category first.',
     );
+  }
+
+  if (shuffleMode) {
+    entries = [...entries];
+    for (let index = entries.length - 1; index > 0; index--) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      [entries[index], entries[randomIndex]] = [
+        entries[randomIndex],
+        entries[index],
+      ];
+    }
   }
 
   // Playlist content is built after ffprobe to include duration lines.

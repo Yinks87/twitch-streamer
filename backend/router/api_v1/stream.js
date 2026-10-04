@@ -3,7 +3,11 @@ import * as db from '../../db/db.js';
 import config from '../../config.js';
 import { requireAuth } from '../../middleware/index.js';
 import * as streamManager from '../../streamManager.js';
-import { getBroadcasterData, validateAndProceed } from '../../twitch/api.js';
+import {
+  getBroadcasterData,
+  sendChatMessage,
+  validateAndProceed,
+} from '../../twitch/api.js';
 
 const streamRouter = express.Router();
 const STREAMER_DATA_ERROR =
@@ -85,6 +89,10 @@ streamRouter.post(
   async (req, res) => {
     try {
       await refreshBroadcasterData();
+
+      const user = db.getBroadcasterUser();
+      const access_token = user.access_token;
+
       const {
         twitchServer,
         streamKey,
@@ -94,6 +102,7 @@ streamRouter.post(
         streamFps,
         restartIntervalSeconds,
         restartDelaySeconds,
+        chatMessages,
       } = db.getSettings();
       res.json(
         await streamManager.startStream({
@@ -107,6 +116,12 @@ streamRouter.post(
           restartDelaySeconds,
         }),
       );
+      await sendChatMessage({
+        access_token,
+        broadcaster_id: user.twitch_user_id,
+        sender_id: user.twitch_user_id,
+        message: chatMessages?.pinMessage,
+      });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

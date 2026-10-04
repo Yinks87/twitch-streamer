@@ -55,6 +55,8 @@ const StreamHeroPanel = ({
   setSettings,
   readyPlaylist,
   userRole,
+  playlistChangePending,
+  onStreamStarted,
 }) => {
   const { status, setStatus } = useStatusContext();
   const { showAlert } = useAlert();
@@ -65,6 +67,7 @@ const StreamHeroPanel = ({
     try {
       const data = await api.startStream();
       setStatus(data);
+      onStreamStarted?.();
     } catch (err) {
       showAlert({ severity: 'error', message: err.message });
     } finally {
@@ -165,6 +168,22 @@ const StreamHeroPanel = ({
                 label={'Playlist Loop aktivieren'}
               />
             </LoopToggle>
+            <LoopToggle>
+              <Checkbox
+                checked={!!settings.shuffleMode}
+                disabled={status.running}
+                onChange={async (e) => {
+                  const shuffleMode = e.target.checked;
+                  setSettings((s) => ({ ...s, shuffleMode }));
+                  try {
+                    await api.saveSettings({ shuffleMode });
+                  } catch (err) {
+                    showAlert({ severity: 'error', message: err.message });
+                  }
+                }}
+                label="Playlist mischen"
+              />
+            </LoopToggle>
             {status.running ? (
               <Button variant="stop" onClick={handleStop} disabled={busy}>
                 <span className="material-symbols-outlined">stop_circle</span>
@@ -207,6 +226,16 @@ const StreamHeroPanel = ({
         )} */}
       </HeroControls>
 
+      {playlistChangePending && (
+        <div
+          style={{ display: 'flex', width: '100%', justifyContent: 'center' }}
+        >
+          <PlaylistChangeNotice role="status">
+            Änderungen in der Playlist werden beim nächsten Stream Start{' '}
+            <b>ODER</b> beim nächsten Loop wirksam
+          </PlaylistChangeNotice>
+        </div>
+      )}
       {status.log && status.log.length > 0 && (
         <LogDrawer>
           <summary>ffmpeg-Log</summary>
@@ -273,6 +302,15 @@ const NowPlaying = styled.p`
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text);
+`;
+
+const PlaylistChangeNotice = styled.div`
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--signal);
+  border-radius: 6px;
+  color: var(--signal);
+  font-size: 0.85rem;
 `;
 
 const HeroControls = styled.div`

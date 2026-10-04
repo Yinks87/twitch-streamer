@@ -62,6 +62,7 @@ export default function Settings() {
     streamKey: '',
     playlistSource: 'all',
     loopPlaylist: true,
+    shuffleMode: true,
     videoBitrateKbps: 6000,
     audioBitrateKbps: 128,
     streamFps: 60,
