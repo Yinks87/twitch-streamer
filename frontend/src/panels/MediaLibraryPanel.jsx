@@ -13,7 +13,16 @@ import {
 } from '../utils/transcript';
 import Button from '../components/Button';
 import { Input, Select } from '../components/FormControls';
+import ViewModeToggle, { useViewMode } from '../components/ViewModeToggle';
 import {
+  VideoGrid,
+  VideoTile,
+  TileMedia,
+  TileOverlay,
+  TileBody,
+  TileTitle,
+  TileMeta,
+  TileActions,
   VideoList,
   VideoListItem,
   VideoListName,
@@ -165,10 +174,68 @@ function ImportFilterSelect({ value, onChange }) {
   );
 }
 
+// -- One remote VOD/clip: list row or tile ------------------------------------
+function RemoteItem({ grid, thumbUrl, title, meta, status, onImport }) {
+  const hideOnError = (e) => (e.currentTarget.style.display = 'none');
+
+  if (grid) {
+    return (
+      <VideoTile>
+        <TileMedia>
+          {thumbUrl && (
+            <img
+              src={thumbUrl}
+              alt=""
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              onError={hideOnError}
+            />
+          )}
+        </TileMedia>
+        <TileBody>
+          <TileTitle title={title}>{title}</TileTitle>
+          <TileMeta>{meta}</TileMeta>
+          <TileActions>
+            <ImportStatusButton status={status} onImport={onImport} />
+          </TileActions>
+        </TileBody>
+      </VideoTile>
+    );
+  }
+
+  return (
+    <VodRow>
+      {thumbUrl && (
+        <img
+          src={thumbUrl}
+          alt=""
+          style={{
+            width: '80px',
+            height: '45px',
+            objectFit: 'cover',
+            borderRadius: '4px',
+            flexShrink: 0,
+          }}
+          onError={hideOnError}
+        />
+      )}
+      <VideoListName style={{ flex: '1 1 60%' }} title={title}>
+        {title}
+      </VideoListName>
+      <VideoListSize
+        style={{ fontSize: '0.75rem', opacity: 0.65, flex: '1 1 100%' }}
+      >
+        {meta}
+      </VideoListSize>
+      <ImportStatusButton status={status} onImport={onImport} />
+    </VodRow>
+  );
+}
+
 const SOURCE_LABELS = { upload: 'Upload', vod: 'VOD', clip: 'Clip' };
 
 // ── One uploaded video: collapsed row / expanded transcript editor ───────────
 function MediaLibraryItem({
+  grid,
   video,
   playlistEntry,
   onRefresh,
@@ -249,50 +316,70 @@ function MediaLibraryItem({
     }
   }
 
+  const tile = grid && !expanded;
+  const displayTitle = video.transcript?.timestamps?.[0]?.title || video.name;
+  const thumbSrc = `/api/v1/thumbnails/${encodeURIComponent(video.name)}${
+    reloadToken ? `?t=${reloadToken}` : ''
+  }`;
+  const statusDot = (
+    <StatusDot
+      $active={isActive}
+      aria-label={
+        isActive
+          ? 'Aktiv und in der Playlist'
+          : 'Nicht aktiv oder nicht in der Playlist'
+      }
+      title={
+        isActive
+          ? 'Aktiv und in der Playlist'
+          : playlistEntry
+            ? 'In der Playlist, aber deaktiviert'
+            : 'Nicht in der Playlist'
+      }
+    />
+  );
+
   return (
-    <ItemRow>
+    <ItemRow $tile={tile} $wide={grid && expanded}>
       <ItemHeader
         type="button"
+        $tile={tile}
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
       >
-        <StatusDot
-          $active={isActive}
-          aria-label={
-            isActive
-              ? 'Aktiv und in der Playlist'
-              : 'Nicht aktiv oder nicht in der Playlist'
-          }
-          title={
-            isActive
-              ? 'Aktiv und in der Playlist'
-              : playlistEntry
-                ? 'In der Playlist, aber deaktiviert'
-                : 'Nicht in der Playlist'
-          }
-        />
-        <Thumbnail
-          src={`/api/v1/thumbnails/${encodeURIComponent(video.name)}${
-            reloadToken ? `?t=${reloadToken}` : ''
-          }`}
-          alt=""
-        />
-        <VideoListName style={{ minWidth: 0 }}>
-          {video.transcript?.timestamps?.[0]?.title || video.name}
-        </VideoListName>
-        {needsCategory && <Warning>Transkript unvollständig</Warning>}
+        {tile ? (
+          <>
+            <TileMedia>
+              <Thumbnail src={thumbSrc} alt="" fluid />
+              <TileOverlay>{statusDot}</TileOverlay>
+            </TileMedia>
+            <TileBody>
+              <TileTitle title={displayTitle}>{displayTitle}</TileTitle>
+              {needsCategory && <Warning>Transkript unvollständig</Warning>}
+            </TileBody>
+          </>
+        ) : (
+          <>
+            {statusDot}
+            <Thumbnail src={thumbSrc} alt="" />
+            <VideoListName style={{ minWidth: 0 }}>
+              {displayTitle}
+            </VideoListName>
+            {needsCategory && <Warning>Transkript unvollständig</Warning>}
 
-        <ToggleIcon aria-hidden="true">
-          <span
-            style={{
-              transition: 'transform 0.1s ease-in-out',
-              transform: expanded ? 'rotate(90deg)' : 'rotate(270deg)',
-            }}
-            className="material-symbols-outlined small"
-          >
-            arrow_forward_ios
-          </span>
-        </ToggleIcon>
+            <ToggleIcon aria-hidden="true">
+              <span
+                style={{
+                  transition: 'transform 0.1s ease-in-out',
+                  transform: expanded ? 'rotate(90deg)' : 'rotate(270deg)',
+                }}
+                className="material-symbols-outlined small"
+              >
+                arrow_forward_ios
+              </span>
+            </ToggleIcon>
+          </>
+        )}
       </ItemHeader>
 
       {expanded && (
@@ -409,6 +496,9 @@ export default function MediaLibraryPanel({
     setVodsPagination(null);
     setClips([]);
   }
+
+  const [viewMode, setViewMode] = useViewMode('library');
+  const grid = viewMode === 'grid';
 
   const [videoSort, setVideoSort] = useState('desc'); // 'desc' | 'asc'
   const [videoTypeFilter, setVideoTypeFilter] = useState('all'); // 'all' | 'upload' | 'vod' | 'clip'
@@ -562,10 +652,11 @@ export default function MediaLibraryPanel({
               <option value="desc">Datum: Neueste zuerst</option>
               <option value="asc">Datum: Älteste zuerst</option>
             </Select>
+            <ViewModeToggle mode={viewMode} onChange={setViewMode} />
           </SourceRow>
-          <ItemList>
+          <ItemList $grid={grid}>
             {visibleVideos.length === 0 && (
-              <VideoListEmpty>
+              <VideoListEmpty style={{ gridColumn: '1 / -1' }}>
                 {videos.length === 0
                   ? 'Noch keine Videos in der Mediathek vorhanden.'
                   : 'Keine Videos für diesen Filter.'}
@@ -574,6 +665,7 @@ export default function MediaLibraryPanel({
             {visibleVideos.map((video) => (
               <MediaLibraryItem
                 key={video.name}
+                grid={grid}
                 video={video}
                 playlistEntry={playlist.find(
                   (entry) => entry.filename === video.name,
@@ -617,6 +709,7 @@ export default function MediaLibraryPanel({
               value={importFilter}
               onChange={setImportFilter}
             />
+            <ViewModeToggle mode={viewMode} onChange={setViewMode} />
           </SourceRow>
 
           {vodSource === 'other' && !vodUserLogin ? null : vodsLoading &&
@@ -625,53 +718,23 @@ export default function MediaLibraryPanel({
           ) : visibleVods.length === 0 ? (
             <p style={{ opacity: 0.6 }}>Keine Aufzeichnungen gefunden.</p>
           ) : (
-            <VideoList>
-              {visibleVods.map((vod) => {
-                const thumbUrl = vod.thumbnail_url
-                  ?.replace(/%?\{width\}/g, '320')
-                  ?.replace(/%?\{height\}/g, '180');
-                return (
-                  <VodRow key={vod.id}>
-                    {thumbUrl && (
-                      <img
-                        src={thumbUrl}
-                        alt=""
-                        style={{
-                          width: '80px',
-                          height: '45px',
-                          objectFit: 'cover',
-                          borderRadius: '4px',
-                          flexShrink: 0,
-                        }}
-                        onError={(e) =>
-                          (e.currentTarget.style.display = 'none')
-                        }
-                      />
-                    )}
-                    <VideoListName
-                      style={{ flex: '1 1 60%' }}
-                      title={vod.title}
-                    >
-                      {vod.title}
-                    </VideoListName>
-                    <VideoListSize
-                      style={{
-                        fontSize: '0.75rem',
-                        opacity: 0.65,
-                        flex: '1 1 100%',
-                      }}
-                    >
-                      {formatVodDuration(vod.duration)} ·{' '}
-                      {new Date(vod.created_at).toLocaleDateString()}
-                    </VideoListSize>
-                    <ImportStatusButton
-                      status={vod.importStatus}
-                      onImport={() => onImportVod(vod)}
-                    />
-                  </VodRow>
-                );
-              })}
-            </VideoList>
+            <ItemsContainer $grid={grid}>
+              {visibleVods.map((vod) => (
+                <RemoteItem
+                  key={vod.id}
+                  grid={grid}
+                  thumbUrl={vod.thumbnail_url
+                    ?.replace(/%?\{width\}/g, '320')
+                    ?.replace(/%?\{height\}/g, '180')}
+                  title={vod.title}
+                  meta={`${formatVodDuration(vod.duration)} · ${new Date(
+                    vod.created_at,
+                  ).toLocaleDateString()}`}
+                  status={vod.importStatus}
+                  onImport={() => onImportVod(vod)}
+                />
+              ))}
+            </ItemsContainer>
           )}
           {vodsPagination?.cursor && (
             <Button
@@ -755,6 +818,7 @@ export default function MediaLibraryPanel({
               onChange={(e) => setClipCreatorFilter(e.target.value)}
               style={{ minWidth: '180px' }}
             />
+            <ViewModeToggle mode={viewMode} onChange={setViewMode} />
           </SourceRow>
 
           {vodSource === 'other' && !vodUserLogin ? null : clipsLoading &&
@@ -763,44 +827,25 @@ export default function MediaLibraryPanel({
           ) : visibleClips.length === 0 ? (
             <p style={{ opacity: 0.6 }}>Keine Clips gefunden.</p>
           ) : (
-            <VideoList>
+            <ItemsContainer $grid={grid}>
               {visibleClips.map((clip) => (
-                <VodRow key={clip.id}>
-                  {clip.thumbnail_url && (
-                    <img
-                      src={clip.thumbnail_url}
-                      alt=""
-                      style={{
-                        width: '80px',
-                        height: '45px',
-                        objectFit: 'cover',
-                        borderRadius: '4px',
-                        flexShrink: 0,
-                      }}
-                      onError={(e) => (e.currentTarget.style.display = 'none')}
-                    />
-                  )}
-                  <VideoListName style={{ flex: '1 1 60%' }} title={clip.title}>
-                    {clip.title}
-                  </VideoListName>
-                  <VideoListSize
-                    style={{
-                      fontSize: '0.75rem',
-                      opacity: 0.65,
-                      flex: '1 1 100%',
-                    }}
-                  >
-                    {clip.creator_name} · {formatClipDuration(clip.duration)} ·{' '}
-                    {clip.view_count?.toLocaleString('de-DE')} Aufrufe ·{' '}
-                    {new Date(clip.created_at).toLocaleDateString()}
-                  </VideoListSize>
-                  <ImportStatusButton
-                    status={clip.importStatus}
-                    onImport={() => onImportClip(clip)}
-                  />
-                </VodRow>
+                <RemoteItem
+                  key={clip.id}
+                  grid={grid}
+                  thumbUrl={clip.thumbnail_url}
+                  title={clip.title}
+                  meta={`${clip.creator_name} · ${formatClipDuration(
+                    clip.duration,
+                  )} · ${clip.view_count?.toLocaleString(
+                    'de-DE',
+                  )} Aufrufe · ${new Date(
+                    clip.created_at,
+                  ).toLocaleDateString()}`}
+                  status={clip.importStatus}
+                  onImport={() => onImportClip(clip)}
+                />
               ))}
-            </VideoList>
+            </ItemsContainer>
           )}
           {clipsPagination?.cursor && (
             <Button
@@ -914,12 +959,42 @@ const ItemList = styled.ul`
   list-style: none;
   margin: 0;
   padding: 0;
+
+  ${({ $grid }) =>
+    $grid &&
+    `
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 12px;
+  `}
 `;
+
+// VOD/clip results: scrollable list or tile grid.
+function ItemsContainer({ $grid, children }) {
+  return $grid ? (
+    <VideoGrid $maxHeight="560px">{children}</VideoGrid>
+  ) : (
+    <VideoList>{children}</VideoList>
+  );
+}
 
 const ItemRow = styled(VideoListItem)`
   display: block;
   padding: 0;
-  overflow: hidden;
+  /* Expanded rows must not clip the category autocomplete dropdown. */
+  overflow: ${({ $tile }) => ($tile ? 'hidden' : 'visible')};
+
+  ${({ $tile }) =>
+    $tile &&
+    `
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-raised);
+    &:last-child {
+      border-bottom: 1px solid var(--border);
+    }
+  `}
+  ${({ $wide }) => $wide && 'grid-column: 1 / -1;'}
 `;
 
 const ItemHeader = styled.button`
@@ -933,6 +1008,15 @@ const ItemHeader = styled.button`
   color: inherit;
   text-align: left;
   cursor: pointer;
+
+  ${({ $tile }) =>
+    $tile &&
+    `
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+  `}
 `;
 
 const StatusDot = styled.span`

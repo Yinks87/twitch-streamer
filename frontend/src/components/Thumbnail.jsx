@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export default function Thumbnail({ src, alt = '' }) {
+export default function Thumbnail({ src, alt = '', fluid = false }) {
   const [url, setUrl] = useState(src);
   useEffect(() => setUrl(src), [src]);
   return (
@@ -8,10 +8,10 @@ export default function Thumbnail({ src, alt = '' }) {
       src={url}
       alt={alt}
       style={{
-        width: '80px',
-        height: '45px',
+        width: fluid ? '100%' : '80px',
+        height: fluid ? '100%' : '45px',
         objectFit: 'cover',
-        borderRadius: '4px',
+        borderRadius: fluid ? 0 : '4px',
         flexShrink: 0,
         background: '#111',
       }}
