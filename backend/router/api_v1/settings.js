@@ -4,6 +4,16 @@ import { requireAuth } from '../../middleware/index.js';
 
 const settingsRouter = express.Router();
 
+const ENCODER_PRESETS = [
+  'ultrafast',
+  'superfast',
+  'veryfast',
+  'faster',
+  'fast',
+  'medium',
+  'slow',
+];
+
 function isPrivileged(user) {
   return user?.role === 'broadcaster' || user?.role === 'admin';
 }
@@ -25,6 +35,7 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     videoBitrateKbps,
     audioBitrateKbps,
     streamFps,
+    encoderPreset,
     restartIntervalSeconds,
     restartDelaySeconds,
     chatMessages,
@@ -32,6 +43,10 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     pinMessageEnabled,
     maxStorageGb,
   } = req.body || {};
+  if (encoderPreset !== undefined && !ENCODER_PRESETS.includes(encoderPreset))
+    return res.status(400).json({
+      error: `encoderPreset must be one of: ${ENCODER_PRESETS.join(', ')}`,
+    });
   if (twitchServer !== undefined && typeof twitchServer !== 'string')
     return res.status(400).json({ error: 'twitchServer must be a string' });
   if (streamKey !== undefined && typeof streamKey !== 'string')
@@ -118,6 +133,7 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     videoBitrateKbps,
     audioBitrateKbps,
     streamFps,
+    encoderPreset,
     restartIntervalSeconds,
     restartDelaySeconds,
     chatMessages,

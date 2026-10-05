@@ -130,6 +130,36 @@ export default function DestinationPanel({
             />
           </Field>
         </BitrateRow>
+        <Field>
+          <span>Encoder-Qualität (Preset)</span>
+          <Select
+            value={settings.encoderPreset}
+            onChange={(event) =>
+              setSettings((current) => ({
+                ...current,
+                encoderPreset: event.target.value,
+              }))
+            }
+          >
+            {[
+              'ultrafast',
+              'superfast',
+              'veryfast',
+              'faster',
+              'fast',
+              'medium',
+              'slow',
+            ].map((preset) => (
+              <option key={preset} value={preset}>
+                {preset}
+              </option>
+            ))}
+          </Select>
+          <Hint>
+            Langsamere Presets liefern bessere Qualität, benötigen aber mehr
+            CPU.
+          </Hint>
+        </Field>
         <RestartRow>
           <Field>
             <span>Automatischer Neustart nach (HH:MM:SS)</span>

@@ -77,6 +77,20 @@ const migrations = [
         );
     },
   },
+  {
+    version: 3,
+    name: 'add_encoder_preset',
+    up: (db) => {
+      const settingColumns = db
+        .prepare('PRAGMA table_info(settings)')
+        .all()
+        .map((column) => column.name);
+      if (!settingColumns.includes('encoder_preset'))
+        db.exec(
+          "ALTER TABLE settings ADD COLUMN encoder_preset TEXT NOT NULL DEFAULT 'veryfast'",
+        );
+    },
+  },
 
   // Example of a future migration:
   // {
