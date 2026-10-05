@@ -37,6 +37,8 @@ let trimQueueTail = Promise.resolve();
 // Filenames with a trim queued or running / only those still waiting for their turn.
 const trimsActive = new Set();
 const trimsWaiting = new Set();
+// filename → { cancelled, proc } for every queued or running trim.
+const trimJobs = new Map();
 // filename → Set of open read streams serving /stream requests, so a trim can
 // force-close stale handles that would otherwise keep Windows from renaming over the file.
 const activeStreamReaders = new Map();
@@ -379,9 +381,12 @@ videosRouter.post('/videos/:name/trim', async (req, res) => {
 
   trimsActive.add(name);
   trimsWaiting.add(name);
+  const state = { cancelled: false, proc: null };
+  trimJobs.set(name, state);
   const job = trimQueueTail.then(() => {
     trimsWaiting.delete(name);
-    return runTrim(name, filePath, req, res);
+    if (state.cancelled) return res.json({ cancelled: true });
+    return runTrim(name, filePath, req, res, state);
   });
   trimQueueTail = job.catch(() => {});
   try {
@@ -392,10 +397,32 @@ videosRouter.post('/videos/:name/trim', async (req, res) => {
   } finally {
     trimsWaiting.delete(name);
     trimsActive.delete(name);
+    trimJobs.delete(name);
   }
 });
 
-async function runTrim(name, filePath, req, res) {
+async function removeFileQuietly(p) {
+  try {
+    fs.rmSync(p, { force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {}
+}
+
+// Aborts a queued or running trim. The original is untouched: the partial output in
+// the staging dir is deleted by runTrim as soon as ffmpeg has exited.
+videosRouter.post('/videos/:name/trim-cancel', (req, res) => {
+  const name = path.basename(req.params.name);
+  const state = trimJobs.get(name);
+  if (!state) return res.status(404).json({ error: 'Kein laufender Schnitt.' });
+  if (state.committing)
+    return res
+      .status(409)
+      .json({ error: 'Der Schnitt ist bereits abgeschlossen.' });
+  state.cancelled = true;
+  if (state.proc) state.proc.kill('SIGKILL');
+  res.json({ cancelled: true });
+});
+
+async function runTrim(name, filePath, req, res, state) {
   if (!fs.existsSync(filePath))
     return res.status(404).json({ error: 'File not found' });
 
@@ -524,21 +551,28 @@ async function runTrim(name, filePath, req, res) {
       ff.stderr.on('data', (c) => {
         stderr += c.toString();
       });
+      state.proc = ff;
       ff.on('error', reject);
       ff.on('exit', (code) => {
-        if (code === 0) resolve();
+        if (state.cancelled) reject(new Error('cancelled'));
+        else if (code === 0) resolve();
         else
           reject(new Error(`ffmpeg exit code ${code}: ${stderr.slice(-2000)}`));
       });
     });
   } catch (err) {
     trimProgress.delete(name);
-    try {
-      fs.unlinkSync(tempPath);
-    } catch {}
+    await removeFileQuietly(tempPath);
+    if (state.cancelled) return res.json({ cancelled: true });
     return res
       .status(500)
       .json({ error: `Schnitt fehlgeschlagen: ${err.message}` });
+  }
+  state.proc = null;
+  if (state.cancelled) {
+    trimProgress.delete(name);
+    await removeFileQuietly(tempPath);
+    return res.json({ cancelled: true });
   }
   trimProgress.set(name, 100);
 
@@ -572,31 +606,45 @@ async function runTrim(name, filePath, req, res) {
     timestamps,
     mutedSegments: remainingMuted,
   };
-  writeTranscript(name, updatedTranscript);
-
   // Replace the original file with the trimmed result — the original content is gone.
   // Force-close any open preview stream first; Windows otherwise keeps the file
   // locked and the rename fails even after several retries.
+  state.committing = true;
   closeActiveStreamReaders(name);
   try {
     await renameWithRetry(tempPath, filePath);
   } catch (err) {
     trimProgress.delete(name);
-    try {
-      fs.unlinkSync(tempPath);
-    } catch {}
+    await removeFileQuietly(tempPath);
     return res.status(500).json({
       error: `Schnitt fertig, aber die Datei war noch gesperrt (z. B. durch die Vorschau): ${err.message}`,
     });
   }
+  writeTranscript(name, updatedTranscript);
 
-  const thumbPath = path.join(THUMBS_DIR, `${name}.jpg`);
-  try {
-    if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
-  } catch {}
+  // Build a fresh thumbnail from the trimmed video so the library doesn't keep
+  // showing a frame that may have been cut out.
+  await regenerateThumbnail(name, filePath);
 
   trimProgress.delete(name);
   res.json({ transcript: updatedTranscript });
+}
+
+function regenerateThumbnail(name, videoPath) {
+  const thumbPath = path.join(THUMBS_DIR, `${name}.jpg`);
+  try {
+    fs.mkdirSync(THUMBS_DIR, { recursive: true });
+    fs.rmSync(thumbPath, { force: true });
+  } catch {}
+  return new Promise((resolve) => {
+    const proc = spawn(
+      FFMPEG_PATH,
+      ['-ss', '0', '-i', videoPath, '-vframes', '1', '-vf', 'scale=320:-1', '-f', 'image2', '-y', thumbPath],
+      { stdio: 'ignore' },
+    );
+    proc.on('exit', resolve);
+    proc.on('error', resolve);
+  });
 }
 
 // Polled by the frontend while a trim is running to render a percentage.

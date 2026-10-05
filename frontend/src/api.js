@@ -60,6 +60,10 @@ export const api = {
     apiClient
       .get(`/videos/${encodeURIComponent(name)}/trim-progress`)
       .then((res) => res.data),
+  cancelTrim: (name) =>
+    apiClient
+      .post(`/videos/${encodeURIComponent(name)}/trim-cancel`)
+      .then((res) => res.data),
   uploadVideos: (files, metaList) => {
     const form = new FormData();
     Array.from(files).forEach((file) => form.append('videos', file));

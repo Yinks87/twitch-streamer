@@ -209,8 +209,9 @@ function MediaLibraryItem({
     videoRef.current?.pause();
     videoRef.current?.removeAttribute('src');
     videoRef.current?.load();
-    await api.trimVideo(video.name, segments);
+    const result = await api.trimVideo(video.name, segments);
     handleTrimFinished();
+    return result;
   }
 
   async function handleTrimFinished() {
@@ -271,7 +272,9 @@ function MediaLibraryItem({
           }
         />
         <Thumbnail
-          src={`/api/v1/thumbnails/${encodeURIComponent(video.name)}`}
+          src={`/api/v1/thumbnails/${encodeURIComponent(video.name)}${
+            reloadToken ? `?t=${reloadToken}` : ''
+          }`}
           alt=""
         />
         <VideoListName style={{ minWidth: 0 }}>

@@ -54,6 +54,7 @@ export default function VideoTrimmer({
   const [cutRanges, setCutRanges] = useState([]);
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState(null);
   const [queued, setQueued] = useState(false);
   const [manualStart, setManualStart] = useState('00:00:00');
@@ -253,6 +254,17 @@ export default function VideoTrimmer({
 
   const totalCut = cutRanges.reduce((sum, r) => sum + (r.end - r.start), 0);
 
+  async function handleCancel() {
+    setCancelling(true);
+    try {
+      await api.cancelTrim(videoName);
+    } catch (err) {
+      showAlert({ severity: 'error', message: err.response?.data?.error || err.message });
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   async function handleConfirm() {
     // Close the confirmation dialog right away — the processing indicator below
     // takes over for the (potentially long) ffmpeg re-encode.
@@ -261,8 +273,15 @@ export default function VideoTrimmer({
     setSaving(true);
     setProgress(0);
     try {
-      await onTrim(cutRanges);
-      setCutRanges([]);
+      const result = await onTrim(cutRanges);
+      if (result?.cancelled) {
+        showAlert({
+          severity: 'info',
+          message: 'Schnitt abgebrochen – das Original bleibt unverändert.',
+        });
+      } else {
+        setCutRanges([]);
+      }
     } catch (err) {
       showAlert({ severity: 'error', message: err.message });
     } finally {
@@ -311,6 +330,17 @@ export default function VideoTrimmer({
         <div style={{ marginTop: '0.25rem', fontSize: '0.72rem', opacity: 0.55 }}>
           {percent != null ? `${percent.toFixed(1)}%` : queued ? 'Wartet…' : 'Starte…'}
         </div>
+        <Button
+          type="button"
+          variant="ghost"
+          danger
+          onClick={handleCancel}
+          disabled={cancelling || (percent != null && percent >= 100)}
+          style={{ marginTop: '0.5rem', padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+        >
+          <span className="material-symbols-outlined small">cancel</span>
+          {cancelling ? 'Wird abgebrochen…' : 'Schnitt abbrechen'}
+        </Button>
       </div>
     );
   }

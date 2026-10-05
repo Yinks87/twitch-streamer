@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function Thumbnail({ src, alt = '' }) {
   const [url, setUrl] = useState(src);
+  useEffect(() => setUrl(src), [src]);
   return (
     <img
       src={url}
