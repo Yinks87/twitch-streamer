@@ -87,11 +87,25 @@ const StreamHeroPanel = ({
     }
   }
 
-  const lightState = status.running
-    ? 'live'
-    : readyPlaylist.length === 0
-      ? 'idle'
-      : 'ready';
+  const connectionProblem =
+    status.running &&
+    ['stalled', 'offline', 'unreachable'].includes(status.health);
+  const connectionLabel = {
+    stalled: 'Keine Daten – Verbindung zu Twitch hängt',
+    offline: 'Twitch empfängt den Stream nicht',
+    unreachable: 'Twitch nicht erreichbar (Internetausfall?)',
+    connecting: 'Verbindung zu Twitch wird geprüft…',
+  }[status.health];
+
+  const lightState = status.reconnecting
+    ? 'warn'
+    : connectionProblem
+      ? 'warn'
+      : status.running
+        ? 'live'
+        : readyPlaylist.length === 0
+          ? 'idle'
+          : 'ready';
 
   const currentVideoTitle = status.running
     ? readyPlaylist.find((entry) => entry.filename === status.currentVideo)
@@ -108,17 +122,26 @@ const StreamHeroPanel = ({
         <SignalLight state={lightState} aria-hidden="true" />
         <HeroBody>
           <HeroState>
-            {status.running
-              ? 'ON AIR'
-              : readyPlaylist.length === 0
-                ? 'Keine Videos'
-                : 'Bereit'}
+            {status.reconnecting
+              ? 'Verbindung verloren'
+              : connectionProblem
+                ? 'Verbindungsproblem'
+                : status.running
+                  ? 'ON AIR'
+                  : readyPlaylist.length === 0
+                    ? 'Keine Videos'
+                    : 'Bereit'}
           </HeroState>
           <HeroDetail>
-            {status.running ? (
+            {status.reconnecting ? (
+              'Stream wird neu verbunden…'
+            ) : status.running ? (
               <>
                 Läuft seit <Uptime startedAt={status.startedAt} /> · PID{' '}
                 {status.pid ?? '–'}
+                {connectionLabel && status.health !== 'ok'
+                  ? ` · ${connectionLabel}`
+                  : ''}
               </>
             ) : (
               `${readyPlaylist.length} Item(s) in der Playlist`
@@ -258,9 +281,11 @@ const SignalLight = styled.div`
   background: ${({ state }) =>
     state === 'live'
       ? 'var(--live)'
-      : state === 'ready'
-        ? 'var(--signal)'
-        : 'var(--idle)'};
+      : state === 'warn'
+        ? '#e0a030'
+        : state === 'ready'
+          ? 'var(--signal)'
+          : 'var(--idle)'};
   box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.45);
   ${({ state }) =>
     state === 'live' &&

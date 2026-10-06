@@ -330,6 +330,34 @@ export async function getBroadcasterData() {
   });
 }
 
+export async function getStreamLiveStatus() {
+  const broadcaster = db.getBroadcasterUser();
+  if (!broadcaster?.access_token) return { reachable: false, live: null };
+
+  try {
+    const live = await validateAndProceed(
+      broadcaster.access_token,
+      async (validToken) => {
+        const r = await twitchAPI.get(
+          `/streams?user_id=${encodeURIComponent(broadcaster.twitch_user_id)}`,
+          {
+            headers: {
+              'Client-Id': TWITCH_CLIENT_ID,
+              Authorization: `Bearer ${validToken}`,
+            },
+            timeout: 8000,
+          },
+        );
+        return r.data?.data?.[0]?.type === 'live';
+      },
+    );
+    return { reachable: true, live };
+  } catch {
+    // Network outage or Twitch API unreachable: liveness is unknown.
+    return { reachable: false, live: null };
+  }
+}
+
 export async function getStreamKey() {
   const broadcaster = db.getBroadcasterUser();
   if (!broadcaster?.access_token) throw new Error(STREAMER_DATA_ERROR);

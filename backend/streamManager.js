@@ -8,6 +8,32 @@ import { EventEmitter } from 'node:events';
 import config from './config.js';
 import * as db from './db/db.js';
 import { readTranscript, transcriptNeedsCategory } from './utils/transcript.js';
+import { getStreamLiveStatus } from './twitch/api.js';
+
+const STALL_AFTER_MS = 10_000;
+const LIVE_CHECK_INTERVAL_MS = 15_000;
+// Twitch needs a moment after the first RTMP data before /streams reports the channel live.
+const LIVE_GRACE_MS = 60_000;
+let lastProgressAt = 0;
+let liveCheckTimer = null;
+let twitchHealth = { live: null, reachable: null, checkedAt: null };
+
+function stopLiveCheck() {
+  if (liveCheckTimer) clearInterval(liveCheckTimer);
+  liveCheckTimer = null;
+  twitchHealth = { live: null, reachable: null, checkedAt: null };
+}
+
+function startLiveCheck() {
+  stopLiveCheck();
+  const check = async () => {
+    const result = await getStreamLiveStatus();
+    if (!liveCheckTimer) return;
+    twitchHealth = { ...result, checkedAt: new Date().toISOString() };
+  };
+  liveCheckTimer = setInterval(check, LIVE_CHECK_INTERVAL_MS);
+  check();
+}
 
 const FFMPEG_PATH = config.FFMPEG_PATH;
 // Twitch allows up to 8000 kbps / 60 fps; matches OBS's default "veryfast" x264 profile.
@@ -362,8 +388,28 @@ function isRunning() {
 }
 
 export function getStatus() {
+  const running = isRunning();
+  const sinceStart = startedAt ? Date.now() - Date.parse(startedAt) : 0;
+  const stalled =
+    running &&
+    sinceStart > STALL_AFTER_MS &&
+    Date.now() - lastProgressAt > STALL_AFTER_MS;
+  // 'ok' | 'stalled' (ffmpeg not delivering) | 'offline' (Twitch reports channel not live)
+  // | 'unreachable' (Twitch API unreachable, e.g. internet outage) | 'connecting' | null
+  let health = null;
+  if (running) {
+    if (stalled) health = 'stalled';
+    else if (twitchHealth.reachable === false) health = 'unreachable';
+    else if (twitchHealth.live === false)
+      health = sinceStart > LIVE_GRACE_MS ? 'offline' : 'connecting';
+    else if (twitchHealth.live === true) health = 'ok';
+    else health = 'connecting';
+  }
   return {
-    running: isRunning(),
+    running,
+    reconnecting: !running && Boolean(reconnectTimer),
+    health,
+    twitchCheckedAt: twitchHealth.checkedAt,
     startedAt,
     pid: ffmpegProcess ? ffmpegProcess.pid : null,
     lastExit,
@@ -646,6 +692,8 @@ export async function startStream({
   });
   startedAt = new Date().toISOString();
   lastExit = null;
+  lastProgressAt = Date.now();
+  startLiveCheck();
 
   if (restartIntervalSeconds > 0) {
     scheduledRestartAt = new Date(
@@ -696,6 +744,7 @@ export async function startStream({
       const outTimeSecs =
         parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
       lastOutputTimeSecs = outTimeSecs;
+      lastProgressAt = Date.now();
       // Detect when we've crossed into the next cycle of the loop.
       if (loop && totalDuration > 0) {
         while (outTimeSecs >= cycleOffset + totalDuration) {
@@ -750,6 +799,7 @@ export async function startStream({
 
   ffmpegProcess.on('exit', async (code, signal) => {
     const restartConfig = activeStreamConfig;
+    stopLiveCheck();
     const isScheduledRestart = scheduledRestartRequested;
     const isOfflineRestart = offlineRestartRequested;
     scheduledRestartRequested = false;
@@ -817,6 +867,7 @@ export async function startStream({
   });
 
   ffmpegProcess.on('error', (err) => {
+    stopLiveCheck();
     clearScheduledRestartTimer();
     pushLog(`Failed to start ffmpeg: ${err.message}`);
     activeLoopPlaylistPath = null;
