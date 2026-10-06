@@ -7,4 +7,18 @@ export const getEventTypes = (bc) => [
       user_id: `${bc.twitch_user_id}`,
     },
   },
+  {
+    type: 'stream.online',
+    version: '1',
+    condition: {
+      broadcaster_user_id: `${bc.twitch_user_id}`,
+    },
+  },
+  {
+    type: 'stream.offline',
+    version: '1',
+    condition: {
+      broadcaster_user_id: `${bc.twitch_user_id}`,
+    },
+  },
 ];

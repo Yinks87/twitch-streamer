@@ -487,7 +487,10 @@ export default function MediaLibraryPanel({
   setClipSortBy,
   clipCreatorFilter,
   setClipCreatorFilter,
-  onImportClip,
+  clipDateFrom,
+  setClipDateFrom,
+  clipDateTo,
+  setClipDateTo,
   onLoadMoreClips,
 }) {
   // Both the VOD and Clip tab browse the same channel, so switching it must reset both.
@@ -534,21 +537,8 @@ export default function MediaLibraryPanel({
 
   const visibleVods = vods.filter(matchesImportFilter);
 
-  const visibleClips = clips
-    .filter(matchesImportFilter)
-    .filter((clip) =>
-      clipCreatorFilter.trim()
-        ? clip.creator_name
-            ?.toLowerCase()
-            .includes(clipCreatorFilter.trim().toLowerCase())
-        : true,
-    )
-    .slice()
-    .sort((a, b) =>
-      clipSortBy === 'views'
-        ? b.view_count - a.view_count
-        : new Date(b.created_at) - new Date(a.created_at),
-    );
+  // Sorting, creator and date selection are applied by the backend against Twitch.
+  const visibleClips = clips.filter(matchesImportFilter);
 
   return (
     <CollapsiblePanel storageKey="library" title="Medienbibliothek">
@@ -817,6 +807,20 @@ export default function MediaLibraryPanel({
               value={clipCreatorFilter}
               onChange={(e) => setClipCreatorFilter(e.target.value)}
               style={{ minWidth: '180px' }}
+            />
+            <Input
+              type="date"
+              title="Von"
+              value={clipDateFrom}
+              max={clipDateTo || undefined}
+              onChange={(e) => setClipDateFrom(e.target.value)}
+            />
+            <Input
+              type="date"
+              title="Bis"
+              value={clipDateTo}
+              min={clipDateFrom || undefined}
+              onChange={(e) => setClipDateTo(e.target.value)}
             />
             <ViewModeToggle mode={viewMode} onChange={setViewMode} />
           </SourceRow>

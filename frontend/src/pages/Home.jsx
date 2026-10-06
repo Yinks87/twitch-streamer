@@ -33,7 +33,8 @@ const VOD_STATUS_LABEL = {
 
 const PRIVILEGED_ROLES = ['admin', 'broadcaster'];
 const PLAYLIST_CHANGE_NOTICE_KEY = 'twitch-streamer.playlist-change-pending';
-const STREAM_PLAYLIST_SIGNATURE_KEY = 'twitch-streamer.stream-playlist-signature';
+const STREAM_PLAYLIST_SIGNATURE_KEY =
+  'twitch-streamer.stream-playlist-signature';
 
 function getPlaylistSignature(playlist) {
   return playlist.map((entry) => entry.id).join(',');
@@ -103,6 +104,8 @@ function PlayerPageContent() {
   const [clipsPagination, setClipsPagination] = useState(null);
   const [clipSortBy, setClipSortBy] = useState('date'); // 'date' | 'views'
   const [clipCreatorFilter, setClipCreatorFilter] = useState('');
+  const [clipDateFrom, setClipDateFrom] = useState('');
+  const [clipDateTo, setClipDateTo] = useState('');
 
   const [playlist, setPlaylist] = useState([]);
   const [playlistChangePending, setPlaylistChangePending] = useState(
@@ -208,7 +211,9 @@ function PlayerPageContent() {
       loadSettings().catch((e) =>
         showAlert({ severity: 'error', message: e.message }),
       ),
-      loadVideos().catch((e) => showAlert({ severity: 'error', message: e.message })),
+      loadVideos().catch((e) =>
+        showAlert({ severity: 'error', message: e.message }),
+      ),
       loadPlaylist().catch(() => {}),
     ]).finally(() => setPageLoading(false));
   }, [loadMe, loadSettings, loadVideos, loadPlaylist, navigate]);
@@ -221,7 +226,12 @@ function PlayerPageContent() {
     async (after, silent = false) => {
       if (!silent) setClipsLoading(true);
       try {
-        const data = await api.getClips(after, vodUserLogin ?? undefined);
+        const data = await api.getClips(after, vodUserLogin ?? undefined, {
+          sort: clipSortBy,
+          creator: clipCreatorFilter,
+          from: clipDateFrom,
+          to: clipDateTo,
+        });
         setClips((prev) => {
           if (!after) {
             if (silent && prev.length > 0) {
@@ -241,12 +251,22 @@ function PlayerPageContent() {
         if (!silent) setClipsLoading(false);
       }
     },
-    [vodUserLogin],
+    [vodUserLogin, clipSortBy, clipCreatorFilter, clipDateFrom, clipDateTo],
   );
 
   useEffect(() => {
     if (libraryTab === 'clips' && user && clips.length === 0) loadClips();
   }, [libraryTab, user, clips.length, loadClips]);
+
+  // A changed selection invalidates the loaded list; the effect above then reloads it.
+  // The creator text is debounced to avoid a Twitch scan per keystroke.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setClips([]);
+      setClipsPagination(null);
+    }, 400);
+    return () => clearTimeout(id);
+  }, [clipSortBy, clipCreatorFilter, clipDateFrom, clipDateTo]);
 
   // Baseline dynamic refresh — keeps the Mediathek and Playlist views in sync with
   // changes made elsewhere (e.g. a transcript completed in another tab) without
@@ -365,7 +385,10 @@ function PlayerPageContent() {
     try {
       await api.addToPlaylist(filename);
       await loadPlaylist();
-      showAlert({ severity: 'info', message: 'Video zur Playlist hinzugefügt.' });
+      showAlert({
+        severity: 'info',
+        message: 'Video zur Playlist hinzugefügt.',
+      });
     } catch (err) {
       showAlert({ severity: 'error', message: err.message });
     }
@@ -624,6 +647,10 @@ function PlayerPageContent() {
           setClipSortBy={setClipSortBy}
           clipCreatorFilter={clipCreatorFilter}
           setClipCreatorFilter={setClipCreatorFilter}
+          clipDateFrom={clipDateFrom}
+          setClipDateFrom={setClipDateFrom}
+          clipDateTo={clipDateTo}
+          setClipDateTo={setClipDateTo}
           onImportClip={handleImportClip}
           onLoadMoreClips={loadClips}
         />

@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -7,16 +7,22 @@ import { spawn, execSync } from 'node:child_process';
 import config from '../../config.js';
 import * as db from '../../db/db.js';
 import { requireAuth } from '../../middleware/index.js';
-import { writeTranscript, readTranscript, transcriptNeedsCategory, TRANSCRIPTS_DIR } from '../../utils/transcript.js';
-import { renameWithRetry } from '../../utils/fs-retry.js';
 import {
-  getStorageStatus,
-} from '../../utils/media-storage.js';
+  writeTranscript,
+  readTranscript,
+  transcriptNeedsCategory,
+  TRANSCRIPTS_DIR,
+} from '../../utils/transcript.js';
+import { renameWithRetry } from '../../utils/fs-retry.js';
+import { getStorageStatus } from '../../utils/media-storage.js';
 
 const { VIDEOS_DIR, TWITCH_CLIENT_ID, YTDLP_PATH, FFMPEG_PATH } = config;
 // yt-dlp writes here first so an in-progress/merging download never shows up as a
 // (broken) video in the Mediathek, which lists VIDEOS_DIR directly.
-const DOWNLOADS_STAGING_DIR = path.join(path.resolve(VIDEOS_DIR), '.downloading');
+const DOWNLOADS_STAGING_DIR = path.join(
+  path.resolve(VIDEOS_DIR),
+  '.downloading',
+);
 
 function formatBytes(bytes) {
   const gib = Number(bytes) / 1024 ** 3;
@@ -78,7 +84,19 @@ async function makeSeekable(entryId, file) {
   await new Promise((resolve, reject) => {
     const ff = spawn(
       FFMPEG_PATH,
-      ['-hide_banner', '-y', '-i', file, '-map', '0', '-c', 'copy', '-movflags', '+faststart', tmp],
+      [
+        '-hide_banner',
+        '-y',
+        '-i',
+        file,
+        '-map',
+        '0',
+        '-c',
+        'copy',
+        '-movflags',
+        '+faststart',
+        tmp,
+      ],
       { stdio: 'ignore' },
     );
     if (dl) dl.process = ff; // so aborting the download also stops the remux
@@ -149,8 +167,10 @@ twitchApiRouter.get('/twitch/vods', requireAuth, async (req, res) => {
   }
 });
 
-// Twitch's Get Clips endpoint only sorts by view count server-side — the frontend
-// re-sorts the loaded page by date/views and filters by creator name itself.
+const CLIP_PAGE_SIZE = 20;
+const CLIP_SCAN_MAX_PAGES = 10;
+
+// Query: sort ('views' = Twitch order | 'date'), creator, from/to (YYYY-MM-DD).
 twitchApiRouter.get('/twitch/clips', requireAuth, async (req, res) => {
   try {
     const userId = await resolveBroadcasterId(req, req.query.user_login);
@@ -159,19 +179,61 @@ twitchApiRouter.get('/twitch/clips', requireAuth, async (req, res) => {
         error: `Twitch-Nutzer "${req.query.user_login}" nicht gefunden.`,
       });
 
-    const url = new URL('https://api.twitch.tv/helix/clips');
-    url.searchParams.set('broadcaster_id', userId);
-    url.searchParams.set('first', '20');
-    if (req.query.after) url.searchParams.set('after', req.query.after);
-    const r = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${req.user.access_token}`,
-        'Client-Id': TWITCH_CLIENT_ID,
-      },
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.message || 'Failed to fetch clips');
-    const annotated = (data.data || []).map((clip) => {
+    const creator = String(req.query.creator || '')
+      .trim()
+      .toLowerCase();
+    // Twitch can neither sort by date nor filter by creator, so those selections are
+    // applied here over a bounded scan and paged with a numeric offset cursor.
+    const needsScan = req.query.sort === 'date' || Boolean(creator);
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    const from = dateRe.test(req.query.from) ? req.query.from : null;
+    const to = dateRe.test(req.query.to) ? req.query.to : null;
+    let cursor = needsScan ? undefined : req.query.after;
+    let pagination = {};
+    const clips = [];
+
+    for (let page = 0; page < (needsScan ? CLIP_SCAN_MAX_PAGES : 1); page++) {
+      const url = new URL('https://api.twitch.tv/helix/clips');
+      url.searchParams.set('broadcaster_id', userId);
+      url.searchParams.set('first', needsScan ? '100' : String(CLIP_PAGE_SIZE));
+      // Twitch requires started_at whenever ended_at is used.
+      if (from || to) {
+        url.searchParams.set('started_at', `${from || '2016-01-01'}T00:00:00Z`);
+        if (to) url.searchParams.set('ended_at', `${to}T23:59:59Z`);
+      }
+      if (cursor) url.searchParams.set('after', cursor);
+      const r = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${req.user.access_token}`,
+          'Client-Id': TWITCH_CLIENT_ID,
+        },
+      });
+      const data = await r.json();
+
+      if (!r.ok) throw new Error(data.message || 'Failed to fetch clips');
+      clips.push(...(data.data || []));
+      pagination = data.pagination || {};
+      cursor = pagination.cursor;
+      if (!cursor) break;
+    }
+
+    let pageClips = clips;
+    if (needsScan) {
+      const filtered = creator
+        ? clips.filter((c) => c.creator_name?.toLowerCase().includes(creator))
+        : clips;
+      if (req.query.sort === 'date')
+        filtered.sort(
+          (a, b) => new Date(b.created_at) - new Date(a.created_at),
+        );
+      const offset = Number(req.query.after) || 0;
+      pageClips = filtered.slice(offset, offset + CLIP_PAGE_SIZE);
+      pagination =
+        offset + CLIP_PAGE_SIZE < filtered.length
+          ? { cursor: String(offset + CLIP_PAGE_SIZE) }
+          : {};
+    }
+    const annotated = pageClips.map((clip) => {
       const entry = db.getPlaylistEntryByVodId(clip.id);
       return {
         ...clip,
@@ -179,7 +241,7 @@ twitchApiRouter.get('/twitch/clips', requireAuth, async (req, res) => {
         playlistId: entry ? entry.id : null,
       };
     });
-    res.json({ data: annotated, pagination: data.pagination });
+    res.json({ data: annotated, pagination });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

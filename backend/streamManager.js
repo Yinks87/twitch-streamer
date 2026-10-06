@@ -58,6 +58,8 @@ let reconnectTimer = null;
 let scheduledRestartTimer = null;
 let scheduledRestartAt = null;
 let scheduledRestartRequested = false;
+let offlineRestartRequested = false;
+let lastScheduledRestartMs = 0;
 
 function clearVideoChangeTimers() {
   videoChangeTimers.forEach(clearTimeout);
@@ -91,7 +93,7 @@ function resetTransitionState() {
 }
 
 // Uploaded/downloaded files are immutable (UUID names), so probe results can be cached
-// forever — this makes reconnects near-instant instead of re-probing the whole playlist.
+// forever Ã¢â‚¬â€ this makes reconnects near-instant instead of re-probing the whole playlist.
 const probeCache = new Map();
 
 function probeVideo(filepath) {
@@ -233,7 +235,7 @@ export function listVideoFiles() {
     .sort((a, b) => a.localeCompare(b));
 }
 
-// Builds the ffmpeg concat playlist string from the DB — no file written.
+// Builds the ffmpeg concat playlist string from the DB Ã¢â‚¬â€ no file written.
 function buildPlaylistContent() {
   const { playlistSource, shuffleMode } = db.getSettings();
   const filter =
@@ -395,6 +397,7 @@ export async function startStream({
   clearReconnectTimer();
   clearScheduledRestartTimer();
   scheduledRestartRequested = false;
+  offlineRestartRequested = false;
   removeStalePlaylistFiles();
 
   const { entries: playlistEntries } = buildPlaylistContent();
@@ -484,8 +487,8 @@ export async function startStream({
 
   // Loop by making the playlist reference itself instead of `-stream_loop -1`: the concat
   // demuxer keeps timestamps continuous across cycles, whereas stream_loop resets input
-  // timestamps to 0 — which breaks `-re` pacing and makes Twitch disconnect every cycle.
-  // Resume uses `inpoint` on the first (rotated) entry — a fast in-file mp4 seek — NOT a
+  // timestamps to 0 Ã¢â‚¬â€ which breaks `-re` pacing and makes Twitch disconnect every cycle.
+  // Resume uses `inpoint` on the first (rotated) entry Ã¢â‚¬â€ a fast in-file mp4 seek Ã¢â‚¬â€ NOT a
   // global `-ss`: seeking the self-referencing concat script fails and stalls ~66s, Twitch
   // drops the idle connection, and every reconnect dies the same way (crash loop).
   const playlistFilename = `twitch-playlist-${stamp}.txt`;
@@ -540,7 +543,7 @@ export async function startStream({
   // OBS paces frames from a fixed frame counter (frame_time = N / fps) rather than trusting
   // source timestamps. `scale`+`pad`+`setsar` normalize every source to the fixed canvas,
   // `fps` normalizes to the configured FPS, `setpts`/`asetpts` rebuild presentation timestamps
-  // purely from the output sample count, and `format` pins the pixel format — this guarantees a
+  // purely from the output sample count, and `format` pins the pixel format Ã¢â‚¬â€ this guarantees a
   // perfectly monotonic, evenly spaced, constant-parameter stream regardless of how the
   // concatenated source files were encoded (mixed resolution/fps/pix_fmt/timestamps no longer
   // reach the encoder or Twitch).
@@ -635,7 +638,7 @@ export async function startStream({
   sessionLogLines = [];
   pushLog(`Starting stream with ${entries.length} item(s)`);
 
-  // stdin not needed — input comes from the temp file. cwd doubles as a fallback for
+  // stdin not needed Ã¢â‚¬â€ input comes from the temp file. cwd doubles as a fallback for
   // resolving the playlist's relative entries.
   ffmpegProcess = spawn(FFMPEG_PATH, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -663,7 +666,7 @@ export async function startStream({
     }, restartIntervalSeconds * 1000);
   }
 
-  // Populate transition state from pre-fetched durations — no second ffprobe needed.
+  // Populate transition state from pre-fetched durations Ã¢â‚¬â€ no second ffprobe needed.
   resetTransitionState();
   loopFirstFile = entries[0].filename;
   currentVideoFilename = entries[0].filename;
@@ -748,7 +751,10 @@ export async function startStream({
   ffmpegProcess.on('exit', async (code, signal) => {
     const restartConfig = activeStreamConfig;
     const isScheduledRestart = scheduledRestartRequested;
+    const isOfflineRestart = offlineRestartRequested;
     scheduledRestartRequested = false;
+    offlineRestartRequested = false;
+    if (isScheduledRestart) lastScheduledRestartMs = Date.now();
     clearScheduledRestartTimer();
     if (restartConfig && currentVideoFilename) {
       resumeState = {
@@ -757,10 +763,12 @@ export async function startStream({
           currentVideoBaseOffset +
           Math.max(0, lastOutputTimeSecs - currentVideoStartSecs),
         // Scheduled restarts must look like a brand-new broadcast (Twitch's 48h cap), so
-        // only unexpected drops carry the timestamp continuation.
-        outputOffsetSecs: isScheduledRestart
-          ? 0
-          : outputTsOffsetSecs + lastOutputTimeSecs,
+        // only unexpected drops carry the timestamp continuation. After Twitch reported the
+        // stream offline the broadcast is over, so the restart starts a fresh one as well.
+        outputOffsetSecs:
+          isScheduledRestart || isOfflineRestart
+            ? 0
+            : outputTsOffsetSecs + lastOutputTimeSecs,
       };
     }
     clearVideoChangeTimers();
@@ -825,6 +833,7 @@ export function stopStream() {
   clearReconnectTimer();
   clearScheduledRestartTimer();
   scheduledRestartRequested = false;
+  offlineRestartRequested = false;
   resetTransitionState();
   activeStreamConfig = null; // prevent the exit handler from restarting
   resumeState = null;
@@ -832,4 +841,42 @@ export function stopStream() {
   ffmpegProcess.kill('SIGINT');
   streamEvents.emit('streamStopped');
   return getStatus();
+}
+
+const OFFLINE_IGNORE_AFTER_SCHEDULED_RESTART_MS = 180_000;
+
+// Called on EventSub stream.offline. Restarts the stream at the last video position
+// unless the stop was intentional (frontend stop) or part of a scheduled restart.
+export function handleStreamOffline() {
+  if (!activeStreamConfig) return { restarted: false, reason: 'not-streaming' };
+  if (scheduledRestartRequested)
+    return { restarted: false, reason: 'scheduled-restart' };
+  const ignoreMs =
+    OFFLINE_IGNORE_AFTER_SCHEDULED_RESTART_MS +
+    activeStreamConfig.restartDelaySeconds * 1000;
+  if (Date.now() - lastScheduledRestartMs < ignoreMs)
+    return { restarted: false, reason: 'scheduled-restart' };
+  if (reconnectTimer) return { restarted: false, reason: 'reconnect-pending' };
+  if (offlineRestartRequested)
+    return { restarted: false, reason: 'restart-pending' };
+
+  if (isRunning()) {
+    pushLog(
+      'Twitch reported the stream offline; restarting ffmpeg at the current video position.',
+    );
+    offlineRestartRequested = true;
+    ffmpegProcess.kill('SIGINT');
+    return { restarted: true };
+  }
+
+  // ffmpeg is gone and no reconnect is scheduled (e.g. an earlier reconnect failed).
+  pushLog('Twitch reported the stream offline; restarting from resume point.');
+  startStream({ ...activeStreamConfig, resumeFrom: resumeState })
+    .then(() => {
+      resumeState = null;
+    })
+    .catch((err) => {
+      pushLog(`Restart after offline failed: ${err.message}`);
+    });
+  return { restarted: true };
 }

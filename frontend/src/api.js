@@ -92,10 +92,14 @@ export const api = {
       .then((res) => res.data),
 
   // Twitch Clips
-  getClips: (after, userLogin) => {
+  getClips: (after, userLogin, filters = {}) => {
     const p = new URLSearchParams();
     if (after) p.set('after', after);
     if (userLogin) p.set('user_login', userLogin);
+    if (filters.sort) p.set('sort', filters.sort);
+    if (filters.creator?.trim()) p.set('creator', filters.creator.trim());
+    if (filters.from) p.set('from', filters.from);
+    if (filters.to) p.set('to', filters.to);
     const qs = p.toString();
     return apiClient
       .get(`/twitch/clips${qs ? `?${qs}` : ''}`)
