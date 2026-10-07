@@ -1,6 +1,7 @@
 import express from 'express';
 import * as db from '../../db/db.js';
 import { requireAuth } from '../../middleware/index.js';
+import { refreshLimiters } from '../../utils/limiter.js';
 
 const settingsRouter = express.Router();
 
@@ -42,7 +43,18 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     chatMessagesEnabled,
     pinMessageEnabled,
     maxStorageGb,
+    maxConcurrentDownloads,
+    maxConcurrentMerges,
   } = req.body || {};
+  for (const [name, value] of Object.entries({
+    maxConcurrentDownloads,
+    maxConcurrentMerges,
+  })) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 20))
+      return res
+        .status(400)
+        .json({ error: `${name} must be an integer between 1 and 20` });
+  }
   if (encoderPreset !== undefined && !ENCODER_PRESETS.includes(encoderPreset))
     return res.status(400).json({
       error: `encoderPreset must be one of: ${ENCODER_PRESETS.join(', ')}`,
@@ -140,8 +152,11 @@ settingsRouter.post('/settings', requireAuth, (req, res) => {
     chatMessagesEnabled,
     pinMessageEnabled,
     maxStorageGb,
+    maxConcurrentDownloads,
+    maxConcurrentMerges,
   });
   if (!isPrivileged(req.user)) saved.streamKey = '';
+  refreshLimiters();
   res.json(saved);
 });
 

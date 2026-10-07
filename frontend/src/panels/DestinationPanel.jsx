@@ -200,6 +200,42 @@ export default function DestinationPanel({
             }
           />
         </Field>
+        <RestartRow>
+          <Field>
+            <span>Max. gleichzeitige Downloads</span>
+            <NumberInput
+              value={settings.maxConcurrentDownloads}
+              min={1}
+              max={20}
+              step={1}
+              onChange={(value) =>
+                setSettings((current) => ({
+                  ...current,
+                  maxConcurrentDownloads: value,
+                }))
+              }
+            />
+          </Field>
+          <Field>
+            <span>Max. gleichzeitige Zusammenführungen</span>
+            <NumberInput
+              value={settings.maxConcurrentMerges}
+              min={1}
+              max={20}
+              step={1}
+              onChange={(value) =>
+                setSettings((current) => ({
+                  ...current,
+                  maxConcurrentMerges: value,
+                }))
+              }
+            />
+          </Field>
+        </RestartRow>
+        <Hint>
+          Weitere Downloads warten in der Warteschlange, bis ein Platz frei
+          ist.
+        </Hint>
         <Button
           variant="primary"
           type="submit"

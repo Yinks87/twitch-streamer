@@ -27,6 +27,8 @@ const migrations = [
           stream_fps      INTEGER NOT NULL DEFAULT 60,
           restart_interval_seconds INTEGER NOT NULL DEFAULT 169200,
           restart_delay_seconds INTEGER NOT NULL DEFAULT 30,
+          max_concurrent_downloads INTEGER NOT NULL DEFAULT 2,
+          max_concurrent_merges INTEGER NOT NULL DEFAULT 1,
           updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
         );
       
@@ -71,9 +73,20 @@ const migrations = [
         .prepare('PRAGMA table_info(settings)') // Get the table info for the settings table
         .all()
         .map((column) => column.name);
-      if (!settingColumns.includes('shuffle_mode')) // Add the max_storage_gb column if it doesn't exist
+      if (!settingColumns.includes('shuffle_mode'))
+        // Add the shuffle_mode column if it doesn't exist
         db.exec(
           'ALTER TABLE settings ADD COLUMN shuffle_mode INTEGER NOT NULL DEFAULT 0',
+        );
+      if (!settingColumns.includes('max_concurrent_downloads'))
+        // Add the max_concurrent_downloads column if it doesn't exist
+        db.exec(
+          'ALTER TABLE settings ADD COLUMN max_concurrent_downloads INTEGER NOT NULL DEFAULT 2',
+        );
+      if (!settingColumns.includes('max_concurrent_merges'))
+        // Add the max_concurrent_merges column if it doesn't exist
+        db.exec(
+          'ALTER TABLE settings ADD COLUMN max_concurrent_merges INTEGER NOT NULL DEFAULT 1',
         );
     },
   },
@@ -88,6 +101,24 @@ const migrations = [
       if (!settingColumns.includes('encoder_preset'))
         db.exec(
           "ALTER TABLE settings ADD COLUMN encoder_preset TEXT NOT NULL DEFAULT 'veryfast'",
+        );
+    },
+  },
+  {
+    version: 4,
+    name: 'add_download_concurrency_limits',
+    up: (db) => {
+      const settingColumns = db
+        .prepare('PRAGMA table_info(settings)')
+        .all()
+        .map((column) => column.name);
+      if (!settingColumns.includes('max_concurrent_downloads'))
+        db.exec(
+          'ALTER TABLE settings ADD COLUMN max_concurrent_downloads INTEGER NOT NULL DEFAULT 2',
+        );
+      if (!settingColumns.includes('max_concurrent_merges'))
+        db.exec(
+          'ALTER TABLE settings ADD COLUMN max_concurrent_merges INTEGER NOT NULL DEFAULT 1',
         );
     },
   },

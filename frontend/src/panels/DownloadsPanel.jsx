@@ -54,7 +54,11 @@ export default function DownloadsPanel({ onAborted }) {
             />
           </ProgressTrack>
           <DownloadMeta>
-            {download.phase === 'processing' ? (
+            {download.phase === 'queued' ? (
+              'In der Warteschlange (wartet auf freien Download-Platz)…'
+            ) : download.phase === 'waiting' ? (
+              'Wartet auf freien Platz zum Zusammenführen…'
+            ) : download.phase === 'processing' ? (
               'Verarbeite Video (Fragmente werden zusammengeführt)…'
             ) : (
               <>

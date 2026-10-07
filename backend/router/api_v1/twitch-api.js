@@ -15,6 +15,7 @@ import {
 } from '../../utils/transcript.js';
 import { renameWithRetry } from '../../utils/fs-retry.js';
 import { getStorageStatus } from '../../utils/media-storage.js';
+import { downloadLimiter, mergeLimiter } from '../../utils/limiter.js';
 
 const { VIDEOS_DIR, TWITCH_CLIENT_ID, YTDLP_PATH, FFMPEG_PATH } = config;
 // yt-dlp writes here first so an in-progress/merging download never shows up as a
@@ -43,8 +44,20 @@ function removeDownloadArtifacts(filename) {
   }
 }
 
-// Fragmented MP4s (moof boxes, no sidx) can't be probed by browsers without one range
-// request per fragment, so long VODs never finish loading in the <video> preview.
+// yt-dlp's HLS output is raw MPEG-TS inside a .mp4 file, which browsers can't play;
+// fragmented MP4s (moof boxes, no sidx) can't be probed without one range request per
+// fragment, so long VODs never finish loading in the <video> preview.
+function isMpegTs(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(189);
+    const read = fs.readSync(fd, buf, 0, 189, 0);
+    return read === 189 && buf[0] === 0x47 && buf[188] === 0x47;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function isFragmentedMp4(file) {
   const fd = fs.openSync(file, 'r');
   try {
@@ -68,45 +81,56 @@ function isFragmentedMp4(file) {
   }
 }
 
-// Rewrites a fragmented MP4 (stream copy, no re-encode) as a regular MP4 with the
-// index up front. Shown as the "processing" phase of the download.
+// Rewrites yt-dlp's raw output (MPEG-TS or fragmented MP4) as a regular MP4 with the
+// index up front (stream copy, no re-encode). yt-dlp's own fixups are disabled so this
+// is the single ffmpeg step per download, limited by the "max concurrent merges" setting.
 async function makeSeekable(entryId, file) {
-  if (!isFragmentedMp4(file)) return;
-  const tmp = `${file}.faststart.mp4`;
+  if (!isMpegTs(file) && !isFragmentedMp4(file)) return;
   const dl = activeDownloads.get(entryId);
   if (dl) {
-    dl.phase = 'processing';
+    dl.phase = 'waiting';
     dl.progress = 100;
     dl.speed = '';
     dl.eta = '';
   }
-  console.log(`[ffmpeg] remuxing fragmented MP4: ${file}`);
-  await new Promise((resolve, reject) => {
-    const ff = spawn(
-      FFMPEG_PATH,
-      [
-        '-hide_banner',
-        '-y',
-        '-i',
-        file,
-        '-map',
-        '0',
-        '-c',
-        'copy',
-        '-movflags',
-        '+faststart',
-        tmp,
-      ],
-      { stdio: 'ignore' },
-    );
-    if (dl) dl.process = ff; // so aborting the download also stops the remux
-    ff.on('error', reject);
-    ff.on('exit', (code) =>
-      code === 0 ? resolve() : reject(new Error(`ffmpeg remux exit ${code}`)),
-    );
-  });
-  fs.rmSync(file, { force: true });
-  await renameWithRetry(tmp, file);
+  const release = await mergeLimiter.acquire();
+  try {
+    if (!activeDownloads.has(entryId)) return; // aborted while waiting for a slot
+    if (dl) dl.phase = 'processing';
+    const tmp = `${file}.faststart.mp4`;
+    console.log(`[ffmpeg] remuxing: ${file}`);
+    await new Promise((resolve, reject) => {
+      const ff = spawn(
+        FFMPEG_PATH,
+        [
+          '-hide_banner',
+          '-y',
+          '-i',
+          file,
+          // Twitch HLS carries a timed-metadata data stream the MP4 muxer rejects.
+          '-map',
+          '0:v?',
+          '-map',
+          '0:a?',
+          '-c',
+          'copy',
+          '-movflags',
+          '+faststart',
+          tmp,
+        ],
+        { stdio: 'ignore' },
+      );
+      if (dl) dl.process = ff; // so aborting the download also stops the remux
+      ff.on('error', reject);
+      ff.on('exit', (code) =>
+        code === 0 ? resolve() : reject(new Error(`ffmpeg remux exit ${code}`)),
+      );
+    });
+    fs.rmSync(file, { force: true });
+    await renameWithRetry(tmp, file);
+  } finally {
+    release();
+  }
 }
 
 // Resolves a login name to a Twitch user ID, or falls back to the signed-in user.
@@ -361,103 +385,122 @@ async function importRemoteVideo(
     'bestvideo+bestaudio/best',
     '--merge-output-format',
     'mp4',
+    // Remuxing is done by makeSeekable() so it can be limited to N parallel jobs.
+    '--fixup',
+    'never',
     ...(ffmpegDir !== '.' ? ['--ffmpeg-location', ffmpegDir] : []),
     '-o',
     stagingPath,
     sourceUrl,
   ];
 
-  console.log(`[yt-dlp] starting download: ${sourceUrl}`);
-  const ytdlp = spawn(YTDLP_PATH, ytdlpArgs, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  // Stays "queued" until one of the "max concurrent downloads" slots is free.
   activeDownloads.set(entryId, {
-    process: ytdlp,
+    process: null,
     progress: 0,
     speed: '',
     eta: '',
-    phase: 'downloading',
+    phase: 'queued',
     filename,
     title,
   });
 
-  // yt-dlp uses \r for in-place progress lines on Windows — split on both \r and \n.
-  const parseProgress = (chunk) => {
-    for (const line of chunk
-      .toString()
-      .split(/[\r\n]+/)
-      .filter(Boolean)) {
-      // After the last fragment yt-dlp merges/remuxes/fixes the streams with ffmpeg
-      // and prints no percentage, so surface it as a separate phase.
-      if (/^\[(Merger|Fixup\w*|VideoRemuxer|VideoConvertor)\]/.test(line)) {
-        const dl = activeDownloads.get(entryId);
-        if (dl) {
-          dl.phase = 'processing';
-          dl.progress = 100;
-          dl.speed = '';
-          dl.eta = '';
-        }
-        continue;
-      }
-      const m = line.match(
-        /\[download\]\s+([\d.]+)%.*?at\s+(\S+)\s+ETA\s+(\S+)/,
-      );
-      if (m) {
-        const dl = activeDownloads.get(entryId);
-        if (dl) {
-          dl.progress = parseFloat(m[1]);
-          dl.speed = m[2];
-          dl.eta = m[3];
-        }
-      }
-    }
-  };
+  const startDownload = (releaseSlot) => {
+    console.log(`[yt-dlp] starting download: ${sourceUrl}`);
+    const ytdlp = spawn(YTDLP_PATH, ytdlpArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const active = activeDownloads.get(entryId);
+    active.process = ytdlp;
+    active.phase = 'downloading';
 
-  ytdlp.stdout.on('data', (c) => {
-    c.toString()
-      .split(/[\r\n]+/)
-      .filter(Boolean)
-      .forEach((l) => console.log('[yt-dlp]', l));
-    parseProgress(c);
-  });
-  ytdlp.stderr.on('data', (c) => {
-    c.toString()
-      .split(/[\r\n]+/)
-      .filter(Boolean)
-      .forEach((l) => console.error('[yt-dlp]', l));
-    parseProgress(c);
-  });
+    // yt-dlp uses \r for in-place progress lines on Windows — split on both \r and \n.
+    const parseProgress = (chunk) => {
+      for (const line of chunk
+        .toString()
+        .split(/[\r\n]+/)
+        .filter(Boolean)) {
+        // After the last fragment yt-dlp merges/remuxes/fixes the streams with ffmpeg
+        // and prints no percentage, so surface it as a separate phase.
+        if (/^\[(Merger|Fixup\w*|VideoRemuxer|VideoConvertor)\]/.test(line)) {
+          const dl = activeDownloads.get(entryId);
+          if (dl) {
+            dl.phase = 'processing';
+            dl.progress = 100;
+            dl.speed = '';
+            dl.eta = '';
+          }
+          continue;
+        }
+        const m = line.match(
+          /\[download\]\s+([\d.]+)%.*?at\s+(\S+)\s+ETA\s+(\S+)/,
+        );
+        if (m) {
+          const dl = activeDownloads.get(entryId);
+          if (dl) {
+            dl.progress = parseFloat(m[1]);
+            dl.speed = m[2];
+            dl.eta = m[3];
+          }
+        }
+      }
+    };
 
-  ytdlp.on('exit', async (code) => {
-    if (code === 0 && fs.existsSync(stagingPath)) {
-      try {
-        await makeSeekable(entryId, stagingPath);
-        if (!activeDownloads.has(entryId)) return; // aborted while processing
+    ytdlp.stdout.on('data', (c) => {
+      c.toString()
+        .split(/[\r\n]+/)
+        .filter(Boolean)
+        .forEach((l) => console.log('[yt-dlp]', l));
+      parseProgress(c);
+    });
+    ytdlp.stderr.on('data', (c) => {
+      c.toString()
+        .split(/[\r\n]+/)
+        .filter(Boolean)
+        .forEach((l) => console.error('[yt-dlp]', l));
+      parseProgress(c);
+    });
+
+    ytdlp.on('exit', async (code) => {
+      releaseSlot();
+      if (code === 0 && fs.existsSync(stagingPath)) {
+        try {
+          await makeSeekable(entryId, stagingPath);
+          if (!activeDownloads.has(entryId)) return; // aborted while processing
+          activeDownloads.delete(entryId);
+          await renameWithRetry(stagingPath, outPath);
+        } catch (err) {
+          if (!activeDownloads.has(entryId)) return;
+          activeDownloads.delete(entryId);
+          console.error(`[yt-dlp] failed to finalize download: ${err.message}`);
+          db.updatePlaylistEntry(entryId, { status: 'error' });
+          removeDownloadArtifacts(filename);
+          return;
+        }
+        console.log(`[yt-dlp] ${kind} ${remoteId} downloaded successfully`);
+        db.updatePlaylistEntry(entryId, { status: 'ready' });
+      } else {
         activeDownloads.delete(entryId);
-        await renameWithRetry(stagingPath, outPath);
-      } catch (err) {
-        if (!activeDownloads.has(entryId)) return;
-        activeDownloads.delete(entryId);
-        console.error(`[yt-dlp] failed to finalize download: ${err.message}`);
+        console.error(
+          `[yt-dlp] ${kind} ${remoteId} failed (exit code ${code})`,
+        );
         db.updatePlaylistEntry(entryId, { status: 'error' });
         removeDownloadArtifacts(filename);
-        return;
       }
-      console.log(`[yt-dlp] ${kind} ${remoteId} downloaded successfully`);
-      db.updatePlaylistEntry(entryId, { status: 'ready' });
-    } else {
+    });
+
+    ytdlp.on('error', (err) => {
+      releaseSlot();
       activeDownloads.delete(entryId);
-      console.error(`[yt-dlp] ${kind} ${remoteId} failed (exit code ${code})`);
+      console.error(`[yt-dlp] spawn error: ${err.message}`);
       db.updatePlaylistEntry(entryId, { status: 'error' });
       removeDownloadArtifacts(filename);
-    }
-  });
+    });
+  };
 
-  ytdlp.on('error', (err) => {
-    activeDownloads.delete(entryId);
-    console.error(`[yt-dlp] spawn error: ${err.message}`);
-    db.updatePlaylistEntry(entryId, { status: 'error' });
-    removeDownloadArtifacts(filename);
+  downloadLimiter.acquire().then((releaseSlot) => {
+    if (!activeDownloads.has(entryId)) return releaseSlot(); // aborted while queued
+    startDownload(releaseSlot);
   });
 
   res.json({ entry });
@@ -516,7 +559,9 @@ twitchApiRouter.delete('/downloads/:entryId', requireAuth, (req, res) => {
   if (!dl) return res.status(404).json({ error: 'Download not found' });
   // Use taskkill /T on Windows to kill the whole process tree (yt-dlp + ffmpeg child).
   try {
-    if (process.platform === 'win32' && dl.process.pid) {
+    if (!dl.process) {
+      // still queued, nothing running yet
+    } else if (process.platform === 'win32' && dl.process.pid) {
       execSync(`taskkill /F /T /PID ${dl.process.pid}`, { stdio: 'ignore' });
     } else {
       dl.process.kill('SIGTERM');

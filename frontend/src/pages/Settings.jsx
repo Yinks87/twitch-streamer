@@ -36,6 +36,8 @@ function getDestinationSettings(settings, twitchServer) {
     restartIntervalSeconds: settings.restartIntervalSeconds,
     restartDelaySeconds: settings.restartDelaySeconds,
     maxStorageGb: settings.maxStorageGb,
+    maxConcurrentDownloads: settings.maxConcurrentDownloads,
+    maxConcurrentMerges: settings.maxConcurrentMerges,
   };
 }
 
@@ -71,6 +73,8 @@ export default function Settings() {
     restartIntervalSeconds: 169200,
     restartDelaySeconds: 5,
     maxStorageGb: 100,
+    maxConcurrentDownloads: 2,
+    maxConcurrentMerges: 1,
     chatMessagesEnabled: true,
     pinMessageEnabled: true,
     chatMessages: {
@@ -147,6 +151,8 @@ export default function Settings() {
         restartIntervalSeconds: Number(settings.restartIntervalSeconds),
         restartDelaySeconds: Number(settings.restartDelaySeconds),
         maxStorageGb: Number(settings.maxStorageGb),
+        maxConcurrentDownloads: Number(settings.maxConcurrentDownloads),
+        maxConcurrentMerges: Number(settings.maxConcurrentMerges),
         chatMessagesEnabled: settings.chatMessagesEnabled,
         pinMessageEnabled: settings.pinMessageEnabled,
         chatMessages: {

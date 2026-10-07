@@ -42,6 +42,8 @@ export function getSettings() {
         pin_message_enabled,
         chat_messages,
         max_storage_gb,
+        max_concurrent_downloads,
+        max_concurrent_merges,
         updated_at
       FROM settings
       WHERE id = 1`,
@@ -64,6 +66,8 @@ export function getSettings() {
     pinMessageEnabled: row.pin_message_enabled === 1,
     chatMessages: JSON.parse(row.chat_messages),
     maxStorageGb: row.max_storage_gb,
+    maxConcurrentDownloads: row.max_concurrent_downloads,
+    maxConcurrentMerges: row.max_concurrent_merges,
     updatedAt: row.updated_at,
   };
 }
@@ -85,6 +89,8 @@ export function saveSettings({
   pinMessageEnabled,
   chatMessages,
   maxStorageGb,
+  maxConcurrentDownloads,
+  maxConcurrentMerges,
 } = {}) {
   const cur = getSettings();
   db.prepare(
@@ -105,6 +111,8 @@ export function saveSettings({
       pin_message_enabled = ?,
       chat_messages = ?,
       max_storage_gb = ?,
+      max_concurrent_downloads = ?,
+      max_concurrent_merges = ?,
       updated_at = datetime('now')
     WHERE id = 1`,
   ).run(
@@ -148,6 +156,8 @@ export function saveSettings({
         : 0,
     JSON.stringify(chatMessages ?? cur.chatMessages),
     maxStorageGb ?? cur.maxStorageGb,
+    maxConcurrentDownloads ?? cur.maxConcurrentDownloads,
+    maxConcurrentMerges ?? cur.maxConcurrentMerges,
   );
   return getSettings();
 }

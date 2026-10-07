@@ -566,6 +566,7 @@ export default function MediaLibraryPanel({
   setAltUsernameInput,
   onImportVod,
   onLoadMoreVods,
+  onImportClip,
   clips,
   setClips,
   clipsLoading,
