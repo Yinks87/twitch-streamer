@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import Thumbnail from '../components/Thumbnail';
@@ -116,6 +116,19 @@ function RemoteSourceSelector({
 // ── Shared import button: ready / downloading / error / not-yet-imported states —
 // used by both the VOD and Clip rows. ───────────────────────────────────────────
 function ImportStatusButton({ status, onImport }) {
+  const [pending, setPending] = useState(false);
+
+  // Disabled until the import request (and subsequent status refresh) completes.
+  async function handleClick() {
+    if (pending) return;
+    setPending(true);
+    try {
+      await onImport();
+    } finally {
+      setPending(false);
+    }
+  }
+
   if (status === 'ready') {
     return (
       <span
@@ -143,7 +156,8 @@ function ImportStatusButton({ status, onImport }) {
         style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}
         variant="ghost"
         danger
-        onClick={onImport}
+        disabled={pending}
+        onClick={handleClick}
       >
         <span className="material-symbols-outlined small">
           file_download_off
@@ -156,10 +170,11 @@ function ImportStatusButton({ status, onImport }) {
     <Button
       style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}
       variant="ghost"
-      onClick={onImport}
+      disabled={pending}
+      onClick={handleClick}
     >
       <span className="material-symbols-outlined small">download</span>{' '}
-      Importieren
+      {pending ? 'Startet…' : 'Importieren'}
     </Button>
   );
 }
@@ -171,6 +186,33 @@ function ImportFilterSelect({ value, onChange }) {
       <option value="imported">Status: Importiert</option>
       <option value="not_imported">Status: Nicht importiert</option>
     </Select>
+  );
+}
+
+function TrimProgressStatus({ trimProgress }) {
+  const percent =
+    typeof trimProgress.progress === 'number'
+      ? Math.max(0, Math.min(100, trimProgress.progress))
+      : null;
+
+  return (
+    <TrimStatus role="status">
+      <TrimStatusText>
+        <span>{trimProgress.queued ? 'Schnitt wartet' : 'Wird geschnitten'}</span>
+        <span>
+          {percent != null ? `${percent.toFixed(1)}%` : 'Wartet…'}
+        </span>
+      </TrimStatusText>
+      <TrimProgressTrack
+        aria-label={
+          percent != null
+            ? `Schnittfortschritt: ${percent.toFixed(1)}%`
+            : 'Schnitt wartet auf den Start'
+        }
+      >
+        <TrimProgressFill $percent={percent} />
+      </TrimProgressTrack>
+    </TrimStatus>
   );
 }
 
@@ -241,6 +283,8 @@ function MediaLibraryItem({
   onRefresh,
   onDelete,
   onAddToPlaylist,
+  trimProgress,
+  onTrimProgress,
 }) {
   const { showAlert } = useAlert();
   const storageKey = `twitch-streamer.mediathek.${video.name}`;
@@ -302,6 +346,40 @@ function MediaLibraryItem({
     setTimestamps(normalizeTranscript(video.transcript || {}).timestamps);
   }, [transcriptSignature]);
 
+  const trimIsRunning = Boolean(trimProgress);
+  useEffect(() => {
+    if (!trimIsRunning || expanded) return undefined;
+    let cancelled = false;
+
+    async function pollTrimProgress() {
+      try {
+        const data = await api.getTrimProgress(video.name);
+        if (cancelled) return;
+        const running =
+          typeof data.progress === 'number' || Boolean(data.queued);
+        onTrimProgress(
+          video.name,
+          running
+            ? {
+                progress:
+                  typeof data.progress === 'number' ? data.progress : null,
+                queued: Boolean(data.queued),
+              }
+            : null,
+        );
+      } catch {
+        // Keep the last known tile status during transient polling errors.
+      }
+    }
+
+    pollTrimProgress();
+    const intervalId = setInterval(pollTrimProgress, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [expanded, onTrimProgress, trimIsRunning, video.name]);
+
   async function saveTranscript() {
     setSaving(true);
     try {
@@ -321,6 +399,8 @@ function MediaLibraryItem({
   const thumbSrc = `/api/v1/thumbnails/${encodeURIComponent(video.name)}${
     reloadToken ? `?t=${reloadToken}` : ''
   }`;
+  const handleTrimProgress = (progress) =>
+    onTrimProgress(video.name, progress);
   const statusDot = (
     <StatusDot
       $active={isActive}
@@ -355,6 +435,9 @@ function MediaLibraryItem({
             </TileMedia>
             <TileBody>
               <TileTitle title={displayTitle}>{displayTitle}</TileTitle>
+              {trimProgress && (
+                <TrimProgressStatus trimProgress={trimProgress} />
+              )}
               {needsCategory && <Warning>Transkript unvollständig</Warning>}
             </TileBody>
           </>
@@ -365,6 +448,9 @@ function MediaLibraryItem({
             <VideoListName style={{ minWidth: 0 }}>
               {displayTitle}
             </VideoListName>
+            {trimProgress && (
+              <TrimProgressStatus trimProgress={trimProgress} />
+            )}
             {needsCategory && <Warning>Transkript unvollständig</Warning>}
 
             <ToggleIcon aria-hidden="true">
@@ -410,6 +496,7 @@ function MediaLibraryItem({
             mutedSegments={video.transcript?.mutedSegments || []}
             onTrim={handleTrim}
             onTrimFinished={handleTrimFinished}
+            onProgress={handleTrimProgress}
             videoName={video.name}
           />
           <TimestampEditor
@@ -502,6 +589,25 @@ export default function MediaLibraryPanel({
 
   const [viewMode, setViewMode] = useViewMode('library');
   const grid = viewMode === 'grid';
+  const [trimProgressByVideo, setTrimProgressByVideo] = useState({});
+
+  const updateTrimProgress = useCallback((name, progress) => {
+    setTrimProgressByVideo((current) => {
+      if (!progress) {
+        if (!(name in current)) return current;
+        const next = { ...current };
+        delete next[name];
+        return next;
+      }
+      const previous = current[name];
+      if (
+        previous?.progress === progress.progress &&
+        previous?.queued === progress.queued
+      )
+        return current;
+      return { ...current, [name]: progress };
+    });
+  }, []);
 
   const [videoSort, setVideoSort] = useState('desc'); // 'desc' | 'asc'
   const [videoTypeFilter, setVideoTypeFilter] = useState('all'); // 'all' | 'upload' | 'vod' | 'clip'
@@ -663,6 +769,8 @@ export default function MediaLibraryPanel({
                 onRefresh={onRefresh}
                 onDelete={onDelete}
                 onAddToPlaylist={onAddToPlaylist}
+                trimProgress={trimProgressByVideo[video.name]}
+                onTrimProgress={updateTrimProgress}
               />
             ))}
           </ItemList>
@@ -1067,6 +1175,36 @@ const ItemMeta = styled.div`
 const Warning = styled.span`
   font-size: 0.75rem;
   color: var(--color-warning, #e0a326);
+`;
+
+const TrimStatus = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 100px;
+  color: var(--text);
+  font-size: 0.72rem;
+`;
+
+const TrimStatusText = styled.div`
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+`;
+
+const TrimProgressTrack = styled.div`
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.15);
+`;
+
+const TrimProgressFill = styled.div`
+  width: ${({ $percent }) => `${$percent ?? 0}%`};
+  height: 100%;
+  background: var(--signal, #9147ff);
+  transition: width 0.4s ease;
 `;
 
 const ItemActions = styled.div`

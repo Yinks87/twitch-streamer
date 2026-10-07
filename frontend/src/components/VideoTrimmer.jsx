@@ -48,6 +48,7 @@ export default function VideoTrimmer({
   mutedSegments = [],
   onTrim,
   onTrimFinished,
+  onProgress,
   videoName,
 }) {
   const { showAlert } = useAlert();
@@ -66,6 +67,8 @@ export default function VideoTrimmer({
   const wasRunningRef = useRef(false);
   const onTrimFinishedRef = useRef(onTrimFinished);
   onTrimFinishedRef.current = onTrimFinished;
+  const onProgressRef = useRef(onProgress);
+  onProgressRef.current = onProgress;
 
   // The server is the source of truth: polling from mount on means a running trim is
   // still shown after the panel was collapsed, the page reloaded, or another tab started it.
@@ -79,6 +82,15 @@ export default function VideoTrimmer({
         if (typeof data.progress === 'number') setProgress(data.progress);
         else if (!savingRef.current) setProgress(null);
         setQueued(Boolean(data.queued));
+        if (running) {
+          onProgressRef.current?.({
+            progress:
+              typeof data.progress === 'number' ? data.progress : null,
+            queued: Boolean(data.queued),
+          });
+        } else if (!savingRef.current) {
+          onProgressRef.current?.(null);
+        }
         if (wasRunningRef.current && !running && !savingRef.current) {
           onTrimFinishedRef.current?.();
         }
@@ -272,6 +284,7 @@ export default function VideoTrimmer({
     savingRef.current = true;
     setSaving(true);
     setProgress(0);
+    onProgressRef.current?.({ progress: 0, queued: false });
     try {
       const result = await onTrim(cutRanges);
       if (result?.cancelled) {
@@ -290,6 +303,7 @@ export default function VideoTrimmer({
       setSaving(false);
       setProgress(null);
       setQueued(false);
+      onProgressRef.current?.(null);
     }
   }
 
