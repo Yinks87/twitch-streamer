@@ -15,12 +15,12 @@ export function handleEventSub(eventSub) {
       break;
     case 'stream.offline':
       console.info(`[TWITCH] Stream is offline`);
-      {
-        const result = streamManager.handleStreamOffline();
-        if (result.restarted) {
-          console.info(`[TWITCH] Unintended stream end detected, restarting stream...`);
-        }
-      }
+      // {
+      //   const result = streamManager.handleStreamOffline();
+      //   if (result.restarted) {
+      //     console.info(`[TWITCH] Unintended stream end detected, restarting stream...`);
+      //   }
+      // }
       break;
     case 'connected':
       console.info(`[TWITCH] Connected to all eventsubs`);
