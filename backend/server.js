@@ -19,6 +19,15 @@ import { connectToTwitchEventSubs } from './twitch/event-subs/eventsubs.js';
 
 const { PORT, VIDEOS_DIR, FRONTEND_URL } = config;
 
+// A single failed request handler or Twitch API call must not take the server (and with
+// it the supervision of the running stream) down.
+process.on('unhandledRejection', (reason) => {
+  console.error('[APP] Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[APP] Uncaught exception:', err);
+});
+
 await db.openDatabase();
 
 if (!fs.existsSync(VIDEOS_DIR)) {
@@ -73,6 +82,11 @@ app.listen(PORT, () => {
   console.log(`[APP] Twitch streamer backend listening on port ${PORT}`);
   startAccessTokenValidationLoop();
   connectToTwitchEventSubs();
+  // Background check of all playlist videos: the format status is known (and cached)
+  // before the first stream start or media library request.
+  streamManager
+    .checkPlaylistFormats()
+    .catch((err) => console.error('[FORMAT-CHECK] failed:', err.message));
 });
 
 // ── Twitch channel auto-update on video change ────────────────────────────────

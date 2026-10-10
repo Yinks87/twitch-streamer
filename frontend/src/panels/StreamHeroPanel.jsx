@@ -54,6 +54,7 @@ const StreamHeroPanel = ({
   settings,
   setSettings,
   readyPlaylist,
+  formatProblems = [],
   userRole,
   playlistChangePending,
   onStreamStarted,
@@ -113,6 +114,11 @@ const StreamHeroPanel = ({
     : null;
 
   const segment = status.running ? status.currentSegment : null;
+  // While streaming, what the running start actually left out; otherwise what the next
+  // start would leave out (derived from the media library's format check).
+  const skippedVideos = status.running
+    ? (status.skippedVideos ?? [])
+    : formatProblems;
 
   return (
     <CollapsiblePanel
@@ -160,6 +166,34 @@ const StreamHeroPanel = ({
               <dt>Kategorie:</dt>
               <dd>{segment.category || '–'}</dd>
             </SegmentList>
+          )}
+          {skippedVideos.length > 0 && (
+            <SkippedNotice role="alert">
+              <strong>
+                {skippedVideos.length} Video(s){' '}
+                {status.running
+                  ? 'werden nicht gestreamt'
+                  : 'werden beim Start nicht gestreamt'}
+              </strong>
+              <ul>
+                {skippedVideos.map((skipped) => (
+                  <li key={skipped.filename}>
+                    <b>{skipped.title}</b>
+                    {skipped.problems.map((problem) => (
+                      <div key={problem.issue}>
+                        {problem.reason}
+                        {problem.fix && <em> → {problem.fix}</em>}
+                      </div>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+              <span>
+                Umwandeln lässt sich das in der Mediathek: Video aufklappen und
+                „In Streamformat umwandeln“ wählen. Es läuft ab dem nächsten
+                Start der Playlist mit.
+              </span>
+            </SkippedNotice>
           )}
         </HeroBody>
       </HeroStateWrapper>
@@ -359,6 +393,35 @@ const SegmentList = styled.dl`
     overflow-wrap: anywhere;
     font-weight: 600;
     color: var(--text);
+  }
+`;
+
+const SkippedNotice = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--color-danger, #e5484d);
+  border-radius: 6px;
+  font-size: 0.82rem;
+
+  strong {
+    color: var(--color-danger, #e5484d);
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 1.1rem;
+  }
+
+  li {
+    margin-bottom: 0.4rem;
+  }
+
+  em {
+    font-style: normal;
+    opacity: 0.8;
   }
 `;
 

@@ -6,6 +6,7 @@ import TimestampEditor from '../components/TimestampEditor';
 import VideoTrimmer from '../components/VideoTrimmer';
 import { api } from '../api';
 import { useAlert } from '../context/AlertContext';
+import { useStatusContext } from '../context/StatusContext';
 import {
   defaultTimestamp,
   normalizeTranscript,
@@ -310,6 +311,51 @@ function MediaLibraryItem({
   }`;
   const transcriptSignature = JSON.stringify(video.transcript || {});
   const needsCategory = videoNeedsCategory(video.transcript);
+  // Not in the streaming format: left out of the stream until re-uploaded/re-imported.
+  const badFormat = (video.formatIssues?.length ?? 0) > 0;
+  const { downloads } = useStatusContext();
+  const convertJobRunning = downloads.some(
+    (download) => download.filename === video.name,
+  );
+  const [convertRequested, setConvertRequested] = useState(false);
+  const sawConvertJob = useRef(false);
+
+  async function handleConvert() {
+    setConvertRequested(true);
+    sawConvertJob.current = false;
+    try {
+      await api.convertVideo(video.name);
+      // Fast conversions can finish between two polls of the running jobs.
+      setTimeout(() => {
+        if (!sawConvertJob.current) {
+          setConvertRequested(false);
+          onRefresh?.();
+        }
+      }, 4000);
+    } catch (err) {
+      setConvertRequested(false);
+      showAlert({ severity: 'error', message: err.message });
+    }
+  }
+
+  useEffect(() => {
+    if (convertJobRunning) {
+      sawConvertJob.current = true;
+    } else if (sawConvertJob.current) {
+      sawConvertJob.current = false;
+      setConvertRequested(false);
+      setReloadToken(Date.now());
+      onRefresh?.();
+    }
+  }, [convertJobRunning]);
+
+  const formatWarning = badFormat && (
+    <FormatWarning
+      title={`Wird nicht gestreamt. ${(video.formatReport?.problems ?? []).map((problem) => problem.reason).join(' ')} Zum Umwandeln das Video aufklappen.`}
+    >
+      Falsches Format – wird nicht gestreamt
+    </FormatWarning>
+  );
   const isActive = Boolean(
     playlistEntry?.enabled && !playlistEntry?.needsCategory,
   );
@@ -439,6 +485,7 @@ function MediaLibraryItem({
                 <TrimProgressStatus trimProgress={trimProgress} />
               )}
               {needsCategory && <Warning>Transkript unvollständig</Warning>}
+              {formatWarning}
             </TileBody>
           </>
         ) : (
@@ -452,6 +499,7 @@ function MediaLibraryItem({
               <TrimProgressStatus trimProgress={trimProgress} />
             )}
             {needsCategory && <Warning>Transkript unvollständig</Warning>}
+            {formatWarning}
 
             <ToggleIcon aria-hidden="true">
               <span
@@ -481,6 +529,46 @@ function MediaLibraryItem({
                 : 'Nicht in der Playlist'}
             </span>
           </ItemMeta>
+          {badFormat && (
+            <FormatNotice role="alert">
+              <strong>Dieses Video wird nicht gestreamt</strong>
+              <p>
+                Es hat nicht das Format, das der Stream braucht, und wird beim
+                Start der Playlist deshalb übersprungen. Zusammengefügt würde
+                es sonst mit falschen Zeitstempeln laufen: Bild friert ein oder
+                der Ton verschiebt sich.
+              </p>
+              <ul>
+                {(video.formatReport?.problems ?? []).map((problem) => (
+                  <li key={problem.issue}>
+                    <span>{problem.reason}</span>
+                    {problem.fix && <em> → {problem.fix}</em>}
+                  </li>
+                ))}
+              </ul>
+              {video.formatReport?.conversion.mode === 'impossible' ? (
+                <p>Dieses Video lässt sich nicht umwandeln.</p>
+              ) : (
+                <>
+                  <p>
+                    {video.formatReport?.conversion.mode === 'reencode'
+                      ? 'Die Umwandlung encodiert das Bild neu und kann je nach Länge mehrere Minuten dauern. Das Original wird erst ersetzt, wenn das Ergebnis fertig ist.'
+                      : 'Die Umwandlung packt das Video nur um, ohne Qualitätsverlust und meist in wenigen Sekunden. Das Original wird erst ersetzt, wenn das Ergebnis fertig ist.'}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={handleConvert}
+                    disabled={convertRequested || convertJobRunning}
+                  >
+                    {convertRequested || convertJobRunning
+                      ? 'Wird umgewandelt…'
+                      : 'In Streamformat umwandeln'}
+                  </Button>
+                </>
+              )}
+            </FormatNotice>
+          )}
           <Preview
             ref={videoRef}
             src={previewSrc}
@@ -1176,6 +1264,47 @@ const ItemMeta = styled.div`
 const Warning = styled.span`
   font-size: 0.75rem;
   color: var(--color-warning, #e0a326);
+`;
+
+const FormatWarning = styled(Warning)`
+  color: var(--color-danger, #e5484d);
+`;
+
+const FormatNotice = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--color-danger, #e5484d);
+  border-radius: 6px;
+  font-size: 0.85rem;
+
+  strong {
+    color: var(--color-danger, #e5484d);
+  }
+
+  p,
+  ul {
+    margin: 0;
+  }
+
+  ul {
+    padding-left: 1.2rem;
+  }
+
+  li {
+    margin-bottom: 0.35rem;
+  }
+
+  em {
+    font-style: normal;
+    opacity: 0.8;
+  }
+
+  button {
+    align-self: flex-start;
+  }
 `;
 
 const TrimStatus = styled.div`

@@ -16,11 +16,16 @@ import {
 import { renameWithRetry } from '../../utils/fs-retry.js';
 import { getStorageStatus } from '../../utils/media-storage.js';
 import { downloadLimiter, mergeLimiter } from '../../utils/limiter.js';
+import {
+  probeStreams,
+  getFormatIssues,
+  normalizeVideoFile,
+} from '../../utils/video-format.js';
 
 const { VIDEOS_DIR, TWITCH_CLIENT_ID, YTDLP_PATH, FFMPEG_PATH } = config;
 // yt-dlp writes here first so an in-progress/merging download never shows up as a
 // (broken) video in the Mediathek, which lists VIDEOS_DIR directly.
-const DOWNLOADS_STAGING_DIR = path.join(
+export const DOWNLOADS_STAGING_DIR = path.join(
   path.resolve(VIDEOS_DIR),
   '.downloading',
 );
@@ -30,10 +35,13 @@ function formatBytes(bytes) {
   return `${Number.isFinite(gib) ? gib.toFixed(2) : '0.00'} GB`;
 }
 
-// Removes any leftover staged/partial files for a download (e.g. "<name>.mp4.part",
+// Cleans up staged/partial files of a download (e.g. "<name>.mp4.part",
 // "<name>.mp4.ytdl", "<name>.mp4.part-Frag123.part") after an abort or failure.
-function removeDownloadArtifacts(filename) {
-  for (const dir of [DOWNLOADS_STAGING_DIR, VIDEOS_DIR]) {
+function removeDownloadArtifacts(
+  filename,
+  dirs = [DOWNLOADS_STAGING_DIR, VIDEOS_DIR],
+) {
+  for (const dir of dirs) {
     try {
       for (const entry of fs.readdirSync(dir)) {
         if (entry === filename || entry.startsWith(`${filename}.`)) {
@@ -149,6 +157,48 @@ async function resolveBroadcasterId(req, userLogin) {
   const uData = await uRes.json();
   if (!uRes.ok || !uData.data?.[0]) return null;
   return uData.data[0].id;
+}
+
+// Brings a video into the common streaming format (see utils/video-format.js).
+// Runs behind the same "max concurrent merges" limit as the remux and shows up as the
+// "processing" phase of the entry; aborting the entry kills the ffmpeg process. A failed
+// conversion keeps the original file instead of losing the video. `options` are passed
+// to normalizeVideoFile (stagingDir, beforeReplace).
+export async function normalizeStagedFile(entryId, file, options = {}) {
+  const streams = await probeStreams(file);
+  if (getFormatIssues(streams).length === 0) return;
+  const dl = activeDownloads.get(entryId);
+  if (dl) {
+    dl.phase = 'waiting';
+    dl.progress = 100;
+    dl.speed = '';
+    dl.eta = '';
+  }
+  const release = await mergeLimiter.acquire();
+  try {
+    if (!activeDownloads.has(entryId)) return; // aborted while waiting for a slot
+    if (dl) dl.phase = 'processing';
+    const result = await normalizeVideoFile(file, {
+      ...options,
+      onProcess: (ff) => {
+        if (dl) dl.process = ff;
+      },
+    });
+    console.log(`[ffmpeg] converted ${file} (${result.issues.join(', ')})`);
+  } catch (err) {
+    if (!activeDownloads.has(entryId)) return; // aborted
+    console.error(`[ffmpeg] format conversion failed: ${err.message}`);
+    if (options.throwOnError) throw err;
+  } finally {
+    release();
+  }
+}
+
+// Negative ids for background jobs that have no playlist entry (they share the
+// activeDownloads registry, whose keys are playlist entry ids).
+let nextPseudoJobId = -1;
+export function nextJobId() {
+  return nextPseudoJobId--;
 }
 
 // entryId → { process, progress, speed, eta, filename, title }
@@ -504,6 +554,8 @@ async function importRemoteVideo(
         try {
           await makeSeekable(entryId, stagingPath);
           if (!activeDownloads.has(entryId)) return; // aborted while processing
+          await normalizeStagedFile(entryId, stagingPath);
+          if (!activeDownloads.has(entryId)) return; // aborted while converting
           activeDownloads.delete(entryId);
           await renameWithRetry(stagingPath, outPath);
         } catch (err) {
@@ -606,6 +658,12 @@ twitchApiRouter.delete('/downloads/:entryId', requireAuth, (req, res) => {
   } catch {}
   activeDownloads.delete(id);
 
+  // Format conversions of an existing library video only own their staged output: the
+  // video itself, its transcript and its playlist entry must survive a cancel.
+  if (dl.kind === 'convert') {
+    removeDownloadArtifacts(dl.filename, [DOWNLOADS_STAGING_DIR]);
+    return res.json({ ok: true });
+  }
   // Clean up the finished file, any yt-dlp partial/fragment/resume files left behind,
   // and the transcript so an aborted download doesn't leave orphaned data behind.
   removeDownloadArtifacts(dl.filename);

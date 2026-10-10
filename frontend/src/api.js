@@ -54,6 +54,10 @@ export const api = {
     apiClient
       .get(`/videos/${encodeURIComponent(name)}/trim-progress`)
       .then((res) => res.data),
+  convertVideo: (name) =>
+    apiClient
+      .post(`/videos/${encodeURIComponent(name)}/convert`)
+      .then((res) => res.data),
   cancelTrim: (name) =>
     apiClient
       .post(`/videos/${encodeURIComponent(name)}/trim-cancel`)

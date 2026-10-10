@@ -41,7 +41,7 @@ async function refreshBroadcasterData() {
   }
 }
 
-streamRouter.get('/stream/status', (req, res) => {
+streamRouter.get('/stream/status', requireAuth, (req, res) => {
   res.json(streamManager.getStatus());
 });
 

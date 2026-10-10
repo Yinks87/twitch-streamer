@@ -60,8 +60,7 @@ const migrations = [
           vod_id     TEXT,
           status     TEXT    NOT NULL DEFAULT 'ready',
           enabled    INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT    NOT NULL DEFAULT (datetime('now')),
-          twitch_created_at TEXT,
+          created_at TEXT    NOT NULL DEFAULT (datetime('now'))
         );
       `);
     },

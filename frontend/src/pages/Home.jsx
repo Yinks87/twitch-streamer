@@ -453,6 +453,21 @@ function PlayerPageContent() {
   const readyPlaylist = playlist.filter(
     (e) => e.status === 'ready' && e.enabled && !e.needsCategory,
   );
+  // Enabled playlist videos that are not in the streaming format: the next stream start
+  // leaves them out.
+  const formatProblems = videos
+    .filter(
+      (video) =>
+        video.formatIssues?.length > 0 &&
+        playlist.some(
+          (e) => e.filename === video.name && e.status === 'ready' && e.enabled,
+        ),
+    )
+    .map((video) => ({
+      filename: video.name,
+      title: video.transcript?.timestamps?.[0]?.title || video.name,
+      problems: video.formatReport?.problems ?? [],
+    }));
 
   return (
     <Console>
@@ -609,6 +624,7 @@ function PlayerPageContent() {
           settings={settings}
           setSettings={setSettings}
           readyPlaylist={readyPlaylist}
+          formatProblems={formatProblems}
           userRole={user.role}
           playlistChangePending={playlistChangePending}
           onStreamStarted={handleStreamStarted}

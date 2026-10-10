@@ -5,7 +5,7 @@ import * as db from '../db/db.js';
 
 const GIB = 1024 ** 3;
 const VIDEOS_DIR = path.resolve(config.VIDEOS_DIR);
-const STAGING_DIRS = ['.uploading', '.downloading', '.trimming', '.stream-cache'];
+const STAGING_DIRS = ['.uploading', '.downloading', '.trimming'];
 
 function directorySize(directory) {
   if (!fs.existsSync(directory)) return 0;

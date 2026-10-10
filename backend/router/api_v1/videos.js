@@ -17,6 +17,21 @@ import {
 } from '../../utils/transcript.js';
 import { renameWithRetry } from '../../utils/fs-retry.js';
 import { getStorageStatus } from '../../utils/media-storage.js';
+import {
+  probeStreams,
+  getFormatIssues,
+  explainFormatIssues,
+  VIDEO_TIMESCALE,
+  AUDIO_SAMPLE_RATE,
+  AUDIO_CHANNELS,
+  SILENT_AUDIO_INPUT,
+} from '../../utils/video-format.js';
+import {
+  activeDownloads,
+  DOWNLOADS_STAGING_DIR,
+  normalizeStagedFile,
+  nextJobId,
+} from './twitch-api.js';
 
 const { VIDEOS_DIR, FFMPEG_PATH } = config;
 const THUMBS_DIR = path.join(path.resolve(VIDEOS_DIR), '.thumbs');
@@ -190,8 +205,28 @@ function secondsToTimestamp(totalSeconds) {
 
 const videosRouter = express.Router();
 
-videosRouter.get('/videos', (req, res) => {
-  const files = streamManager.listVideoFiles().map((name) => {
+// This router is mounted on /api/v1 next to others, so authentication is scoped to its
+// own path prefixes instead of the whole router.
+for (const prefix of ['/videos', '/upload', '/thumbnails', '/storage']) {
+  videosRouter.use(prefix, requireAuth);
+}
+
+videosRouter.get('/videos', async (req, res) => {
+  const names = streamManager.listVideoFiles();
+  // Probing is cached per file version; limit parallel ffprobe runs on a cold cache.
+  const formatIssues = new Array(names.length).fill(null);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: 4 }, async () => {
+      while (next < names.length) {
+        const index = next++;
+        formatIssues[index] = await streamManager.getVideoFormatIssues(
+          path.join(VIDEOS_DIR, names[index]),
+        );
+      }
+    }),
+  );
+  const files = names.map((name, index) => {
     const stat = fs.statSync(path.join(VIDEOS_DIR, name));
     const transcript = readTranscript(name);
     return {
@@ -204,12 +239,18 @@ videosRouter.get('/videos', (req, res) => {
       // Legacy files without a stored timestamp fall back to the file's birth time.
       uploadedAt: transcript?.uploadedAt || (stat.birthtime ?? stat.mtime),
       transcript,
+      // Why the video can't be streamed (empty = fine, null = not checkable), and the
+      // same in plain language for the dashboard.
+      formatIssues: formatIssues[index],
+      formatReport: formatIssues[index]?.length
+        ? explainFormatIssues(formatIssues[index])
+        : null,
     };
   });
   res.json({ videos: files, storage: getStorageStatus() });
 });
 
-videosRouter.post('/storage/check', requireAuth, (req, res) => {
+videosRouter.post('/storage/check', (req, res) => {
   const status = getStorageStatus();
   const uploadBytes = Number(req.body?.bytes ?? 0);
   if (!Number.isFinite(uploadBytes) || uploadBytes < 0)
@@ -236,7 +277,7 @@ videosRouter.post(
     next();
   },
   upload.array('videos', 50),
-  (req, res) => {
+  async (req, res) => {
     const status = getStorageStatus();
     if (status.usedBytes > status.limitBytes) {
       for (const file of req.files || []) fs.rmSync(file.path, { force: true });
@@ -244,10 +285,22 @@ videosRouter.post(
         error: `Upload verworfen: Speicherbedarf ${formatBytes(status.usedBytes)} überschreitet das Limit von ${formatBytes(status.limitBytes)}.`,
       });
     }
+    // Files that are not in the common streaming format are converted first (in the
+    // background, staged outside the library); all others go into the library right away.
     for (const file of req.files || []) {
       const destination = path.join(VIDEOS_DIR, file.filename);
-      fs.renameSync(file.path, destination);
-      file.path = destination;
+      const needsConversion =
+        getFormatIssues(await probeStreams(file.path)).length > 0;
+      if (needsConversion) {
+        fs.mkdirSync(DOWNLOADS_STAGING_DIR, { recursive: true });
+        const staged = path.join(DOWNLOADS_STAGING_DIR, file.filename);
+        fs.renameSync(file.path, staged);
+        file.path = staged;
+        file.pendingDestination = destination;
+      } else {
+        fs.renameSync(file.path, destination);
+        file.path = destination;
+      }
     }
     let metaList = [];
     try {
@@ -287,22 +340,70 @@ videosRouter.post(
       writeTranscript(f.filename, meta);
       const entryTitle =
         timestamps[0]?.title || f.originalname.replace(/\.[^.]+$/, '');
+      let entryId = null;
       if (
         m.addToPlaylist !== false &&
         !db.getPlaylistEntryByFilename(f.filename)
       ) {
-        db.addPlaylistEntry({
+        const entry = db.addPlaylistEntry({
           source: 'upload',
           title: entryTitle,
           filename: f.filename,
           enabled: !transcriptNeedsCategory(meta),
         });
+        entryId = entry.id;
       }
-      return { name: f.filename, size: f.size, meta };
+      if (f.pendingDestination)
+        convertUpload({
+          entryId,
+          filename: f.filename,
+          title: entryTitle,
+          staged: f.path,
+          destination: f.pendingDestination,
+        });
+      return {
+        name: f.filename,
+        size: f.size,
+        meta,
+        ...(f.pendingDestination ? { converting: true } : {}),
+      };
     });
     res.json({ uploaded: saved });
   },
 );
+
+// Converts a staged upload into the common streaming format, then moves it into the
+// library. Until then the playlist entry stays "downloading" (not streamable) and the
+// job is listed with the downloads, where it can be cancelled. Uploads without a
+// playlist entry use a negative pseudo id.
+function convertUpload({ entryId, filename, title, staged, destination }) {
+  const id = entryId ?? nextJobId();
+  if (entryId !== null)
+    db.updatePlaylistEntry(entryId, { status: 'downloading' });
+  activeDownloads.set(id, {
+    process: null,
+    progress: 100,
+    speed: '',
+    eta: '',
+    phase: 'waiting',
+    filename,
+    title,
+  });
+  (async () => {
+    try {
+      await normalizeStagedFile(id, staged);
+      if (!activeDownloads.has(id)) return; // cancelled, artifacts already removed
+      await renameWithRetry(staged, destination);
+      activeDownloads.delete(id);
+      if (entryId !== null) db.updatePlaylistEntry(entryId, { status: 'ready' });
+    } catch (err) {
+      console.error(`[upload] could not finish ${filename}: ${err.message}`);
+      activeDownloads.delete(id);
+      fs.rmSync(staged, { force: true });
+      if (entryId !== null) db.updatePlaylistEntry(entryId, { status: 'error' });
+    }
+  })();
+}
 
 videosRouter.use((err, req, res, next) => {
   if (err instanceof multer.MulterError || err) {
@@ -310,6 +411,65 @@ videosRouter.use((err, req, res, next) => {
   }
   next();
 });
+
+// Converts a library video that is not in the common streaming format, in place: the
+// result is built in the staging dir and only replaces the original once it is complete,
+// so a failed or cancelled conversion leaves the video untouched.
+videosRouter.post(
+  '/videos/:name/convert',
+  requireAuth,
+  async (req, res) => {
+    const name = path.basename(req.params.name);
+    const filePath = path.join(VIDEOS_DIR, name);
+    if (!fs.existsSync(filePath))
+      return res.status(404).json({ error: 'File not found' });
+    if (
+      trimsActive.has(name) ||
+      [...activeDownloads.values()].some((job) => job.filename === name)
+    )
+      return res
+        .status(409)
+        .json({ error: 'Das Video wird gerade verarbeitet.' });
+    const streams = await probeStreams(filePath);
+    if (!streams)
+      return res.status(422).json({ error: 'Das Video ist nicht lesbar.' });
+    const issues = getFormatIssues(streams);
+    if (issues.length === 0) return res.json({ converting: false, issues });
+    if (!streams.some((s) => s.codec_type === 'video'))
+      return res.status(422).json({ error: 'Das Video hat keine Bildspur.' });
+
+    const id = nextJobId();
+    const transcript = readTranscript(name);
+    activeDownloads.set(id, {
+      process: null,
+      progress: 100,
+      speed: '',
+      eta: '',
+      phase: 'waiting',
+      filename: name,
+      title: transcript?.timestamps?.[0]?.title || name,
+      kind: 'convert',
+    });
+    (async () => {
+      try {
+        await normalizeStagedFile(id, filePath, {
+          stagingDir: DOWNLOADS_STAGING_DIR,
+          // A preview stream holding the file open would block replacing it on Windows.
+          beforeReplace: () => closeActiveStreamReaders(name),
+          throwOnError: true,
+        });
+      } catch (err) {
+        console.error(`[convert] ${name} failed: ${err.message}`);
+      } finally {
+        activeDownloads.delete(id);
+        fs.rmSync(path.join(DOWNLOADS_STAGING_DIR, `${name}.normalized.mp4`), {
+          force: true,
+        });
+      }
+    })();
+    res.status(202).json({ converting: true, issues });
+  },
+);
 
 videosRouter.put('/videos/:name/transcript', (req, res) => {
   const name = path.basename(req.params.name);
@@ -489,17 +649,24 @@ async function runTrim(name, filePath, req, res, state) {
   );
   fs.mkdirSync(TRIM_STAGING_DIR, { recursive: true });
   const tempPath = path.join(TRIM_STAGING_DIR, `${crypto.randomUUID()}.mp4`);
+  // Videos without an audio track (e.g. muted clips) have nothing to atrim.
+  const hasAudio = (await probeStreams(filePath))?.some(
+    (s) => s.codec_type === 'audio',
+  );
   const filterParts = [];
   const concatInputs = [];
   significantKeep.forEach((k, i) => {
     filterParts.push(
       `[0:v]trim=start=${k.start}:end=${k.end},setpts=PTS-STARTPTS[v${i}]`,
-      `[0:a]atrim=start=${k.start}:end=${k.end},asetpts=PTS-STARTPTS[a${i}]`,
     );
-    concatInputs.push(`[v${i}][a${i}]`);
+    if (hasAudio)
+      filterParts.push(
+        `[0:a]atrim=start=${k.start}:end=${k.end},asetpts=PTS-STARTPTS[a${i}]`,
+      );
+    concatInputs.push(hasAudio ? `[v${i}][a${i}]` : `[v${i}]`);
   });
   filterParts.push(
-    `${concatInputs.join('')}concat=n=${significantKeep.length}:v=1:a=1[outv][outa]`,
+    `${concatInputs.join('')}concat=n=${significantKeep.length}:v=1:a=${hasAudio ? 1 : 0}[outv]${hasAudio ? '[outa]' : ''}`,
   );
 
   const ffmpegArgs = [
@@ -509,22 +676,33 @@ async function runTrim(name, filePath, req, res, state) {
     '-nostats',
     '-i',
     filePath,
+    ...(hasAudio ? [] : SILENT_AUDIO_INPUT),
     '-filter_complex',
     filterParts.join('; '),
     '-map',
     '[outv]',
-    '-map',
-    '[outa]',
+    // Videos without sound get a silent track (input 1, see SILENT_AUDIO_INPUT).
+    ...(hasAudio ? ['-map', '[outa]'] : ['-map', '1:a:0', '-shortest']),
     '-c:v',
     'libx264',
     '-preset',
     'veryfast',
     '-crf',
     '20',
+    // Common streaming format (see utils/video-format.js): the concat demuxer needs
+    // identical stream parameters across all videos.
+    '-pix_fmt',
+    'yuv420p',
+    '-video_track_timescale',
+    String(VIDEO_TIMESCALE),
     '-c:a',
     'aac',
     '-b:a',
     '160k',
+    '-ar',
+    String(AUDIO_SAMPLE_RATE),
+    '-ac',
+    String(AUDIO_CHANNELS),
     tempPath,
   ];
 
@@ -621,7 +799,6 @@ async function runTrim(name, filePath, req, res, state) {
     });
   }
   writeTranscript(name, updatedTranscript);
-  streamManager.removeStreamCacheFor(name);
 
   // Build a fresh thumbnail from the trimmed video so the library doesn't keep
   // showing a frame that may have been cut out.
@@ -661,7 +838,6 @@ videosRouter.delete('/videos/:name', (req, res) => {
   if (!fs.existsSync(filePath))
     return res.status(404).json({ error: 'File not found' });
   fs.unlinkSync(filePath);
-  streamManager.removeStreamCacheFor(name);
   const thumbPath = path.join(THUMBS_DIR, `${name}.jpg`);
   if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
   const transcriptPath = path.join(TRANSCRIPTS_DIR, `${name}.json`);
@@ -713,7 +889,9 @@ videosRouter.get('/thumbnails/:filename', (req, res) => {
 
   const thumbPath = path.join(THUMBS_DIR, `${filename}.jpg`);
   if (fs.existsSync(thumbPath)) {
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    // Revalidate on every request (ETag/Last-Modified via sendFile): the thumbnail is
+    // replaced in place after a trim, so a long max-age would keep serving the old one.
+    res.setHeader('Cache-Control', 'no-cache');
     return res.sendFile(thumbPath);
   }
 
@@ -744,7 +922,7 @@ videosRouter.get('/thumbnails/:filename', (req, res) => {
   proc.on('exit', (code) => {
     generatingThumbs.delete(filename);
     if (code === 0 && fs.existsSync(thumbPath)) {
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(thumbPath);
     } else {
       res.status(500).end();

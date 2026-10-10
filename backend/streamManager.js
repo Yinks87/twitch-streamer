@@ -2,7 +2,7 @@
 // only event that updates channel metadata for the next stream/video start.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import config from './config.js';
@@ -13,12 +13,23 @@ import {
   getSegmentAt,
 } from './utils/transcript.js';
 import { getStreamLiveStatus } from './twitch/api.js';
+import { getFormatIssues, explainFormatIssues } from './utils/video-format.js';
 
 const STALL_AFTER_MS = 10_000;
 const LIVE_CHECK_INTERVAL_MS = 15_000;
 const WATCHDOG_STALL_MS = 30_000;
 const MAX_LAG_SECS = 60;
-const MAX_PLAYLIST_ENTRIES = 20_000;
+// Upper bound of repeated playlist entries in one ffmpeg run (see startStream).
+const MAX_PLAYLIST_ENTRIES = 100_000;
+// A run shorter than this counts as a failed attempt for the reconnect backoff.
+const MIN_HEALTHY_RUN_MS = 60_000;
+const MAX_RECONNECT_DELAY_SECS = 30;
+// ffmpeg is asked to stop gracefully first; if it hangs it is killed after this long.
+const KILL_ESCALATION_MS = 8_000;
+const MAX_PROBE_PARALLELISM = 6;
+const SESSION_LOG_MAX_LINES = 30_000;
+const SESSION_LOG_KEEP_HEAD = 2_000;
+const MAX_LOG_FILES = 200;
 // Twitch needs a moment after the first RTMP data before /streams reports the channel live.
 const LIVE_GRACE_MS = 60_000;
 let lastProgressAt = 0;
@@ -106,8 +117,6 @@ let sessionLogLines = [];
 let lastExit = null;
 // Stored while streaming so the exit handler can restart for looping.
 let activeStreamConfig = null;
-let activeLoopPlaylistPath = null;
-let pendingLoopPlaylistState = null;
 let resumeState = null;
 // RTMP timestamp base of the current session (seconds already streamed before it).
 let outputTsOffsetSecs = 0;
@@ -123,6 +132,15 @@ let scheduledRestartAt = null;
 let scheduledRestartRequested = false;
 let offlineRestartRequested = false;
 let lastScheduledRestartMs = 0;
+// Guards against two overlapping starts (double click, reconnect + manual start) that
+// would spawn two ffmpeg processes publishing to the same stream key.
+let startingStream = false;
+// Bumped by stopStream() so a start that is still probing files notices it was cancelled.
+let startGeneration = 0;
+// Consecutive failed/very short runs; drives the reconnect backoff.
+let consecutiveFailures = 0;
+// Playlist videos the last start left out (with the plain-language reasons).
+let skippedVideos = [];
 
 function clearVideoChangeTimers() {
   videoChangeTimers.forEach(clearTimeout);
@@ -156,7 +174,7 @@ function resetTransitionState() {
 }
 
 // Uploaded/downloaded files are immutable (UUID names), so probe results can be cached
-// forever Ã¢â‚¬â€ this makes reconnects near-instant instead of re-probing the whole playlist.
+// forever - this makes reconnects near-instant instead of re-probing the whole playlist.
 const probeCache = new Map();
 
 function probeVideo(filepath) {
@@ -177,9 +195,7 @@ function probeVideo(filepath) {
         '-v',
         'error',
         '-show_entries',
-        'stream=codec_type,codec_name,width,height,extradata_hash',
-        '-show_data_hash',
-        'MD5',
+        'stream=codec_type,codec_name,pix_fmt,time_base,sample_rate,channels,width,height',
         '-show_entries',
         'format=duration',
         '-of',
@@ -196,14 +212,11 @@ function probeVideo(filepath) {
           const dur = parseFloat(data?.format?.duration);
           const streams = data?.streams ?? [];
           const stream = streams.find((s) => s.codec_type === 'video') ?? {};
-          const audio = streams.find((s) => s.codec_type === 'audio');
           const info = {
             duration: Number.isFinite(dur) ? dur : null,
             width: Number(stream.width) || null,
             height: Number(stream.height) || null,
-            videoCodec: stream.codec_name ?? null,
-            videoExtradataHash: stream.extradata_hash ?? null,
-            audioCodec: audio?.codec_name ?? null,
+            formatIssues: getFormatIssues(streams),
           };
           probeCache.set(cacheKey, info);
           resolve(info);
@@ -215,150 +228,40 @@ function probeVideo(filepath) {
   });
 }
 
-// The concat demuxer reuses the first file's decoder (and its SPS/PPS from the mp4 header)
-// for every following file. When files differ in codec or H.264 parameter sets the picture
-// of later files is decoded as garbage: timestamps explode or the picture freezes while the
-// audio keeps going. Mixed playlists are therefore remuxed (H.264 copy with in-band
-// SPS/PPS) or converted (other codecs) to MPEG-TS once and cached.
-const STREAM_CACHE_DIRNAME = '.stream-cache';
-const conversions = new Map();
-
-// A cache file is stale when its source was replaced afterwards (trimming works in place).
-function isCacheCurrent(source, target) {
-  try {
-    return fs.statSync(target).mtimeMs >= fs.statSync(source).mtimeMs;
-  } catch {
-    return false;
-  }
-}
-
-// Removes the cached MPEG-TS copy of a video (e.g. after it was deleted or trimmed).
-// Failures (file still in use by a running stream) are retried by the cleanup at the
-// next stream start.
-export function removeStreamCacheFor(filename) {
-  const target = path.resolve(VIDEOS_DIR, STREAM_CACHE_DIRNAME, `${filename}.ts`);
-  if (conversions.has(target)) return;
-  for (const file of [target, `${target}.part`]) {
-    try {
-      fs.rmSync(file, { force: true });
-    } catch {}
-  }
-}
-
-function convertForConcat(filename, probe) {
-  const source = path.resolve(VIDEOS_DIR, filename);
-  const cacheDir = path.resolve(VIDEOS_DIR, STREAM_CACHE_DIRNAME);
-  const target = path.join(cacheDir, `${filename}.ts`);
-  if (conversions.has(target)) return conversions.get(target);
-  if (fs.existsSync(target)) {
-    if (isCacheCurrent(source, target)) return Promise.resolve();
-    fs.rmSync(target, { force: true });
-  }
-
-  const partial = `${target}.part`;
-  const args = [
-    '-y',
-    '-loglevel',
-    'error',
-    '-i',
-    source,
-    '-map',
-    '0:v:0',
-    '-map',
-    '0:a:0?',
-    ...(probe.videoCodec === 'h264'
-      ? ['-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb']
-      : [
-          '-c:v',
-          'libx264',
-          '-preset',
-          'veryfast',
-          '-crf',
-          '18',
-          '-pix_fmt',
-          'yuv420p',
-        ]),
-    ...(probe.audioCodec === 'aac'
-      ? ['-c:a', 'copy']
-      : ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']),
-    '-f',
-    'mpegts',
-    partial,
-  ];
-  pushLog(
-    `Preparing ${filename} (${probe.videoCodec}/${probe.audioCodec ?? 'no audio'}) for seamless playback (one-time).`,
-  );
-  const job = new Promise((resolve, reject) => {
-    fs.mkdirSync(cacheDir, { recursive: true });
-    execFile(
-      FFMPEG_PATH,
-      args,
-      { maxBuffer: 10 * 1024 * 1024 },
-      (err, _stdout, stderr) => {
-        if (err) {
-          fs.rmSync(partial, { force: true });
-          reject(
-            new Error(`Preparing ${filename} failed: ${stderr || err.message}`),
-          );
-          return;
-        }
-        fs.renameSync(partial, target);
-        resolve();
-      },
-    );
-  }).finally(() => conversions.delete(target));
-  conversions.set(target, job);
-  return job;
-}
-
-// Returns the playlist paths (relative to VIDEOS_DIR) that can be safely concatenated.
-// Files are used as-is when they all share one codec and H.264 parameter set; otherwise
-// every file goes through the MPEG-TS cache so no file relies on another one's header.
-async function getPlayableNames(entries, probes) {
-  const signatures = probes.map((p) =>
-    p?.videoCodec
-      ? `${p.videoCodec}|${p.videoExtradataHash}|${p.audioCodec ?? ''}`
-      : null,
-  );
-  const uniform =
-    signatures.every((s) => s !== null && s === signatures[0]) &&
-    probes[0].videoCodec === 'h264' &&
-    (!probes[0].audioCodec || probes[0].audioCodec === 'aac');
-  if (uniform || signatures.some((s) => s === null)) {
-    return entries.map(({ filename }) => filename);
-  }
-  const names = [];
-  for (let i = 0; i < entries.length; i++) {
-    await convertForConcat(entries[i].filename, probes[i]);
-    names.push(`${STREAM_CACHE_DIRNAME}/${entries[i].filename}.ts`);
-  }
-  return names;
-}
-
-// Deletes cache files that are leftovers: partial conversions (when none is running),
-// copies of deleted videos and copies older than their (trimmed) source.
-function removeOrphanedCacheFiles() {
-  const cacheDir = path.resolve(VIDEOS_DIR, STREAM_CACHE_DIRNAME);
-  if (!fs.existsSync(cacheDir)) return;
-  for (const name of fs.readdirSync(cacheDir)) {
-    const cachePath = path.join(cacheDir, name);
-    if (name.endsWith('.part')) {
-      if (conversions.size === 0) fs.rmSync(cachePath, { force: true });
-      continue;
-    }
-    const sourcePath = path.resolve(VIDEOS_DIR, name.replace(/\.ts$/, ''));
-    if (fs.existsSync(sourcePath) && isCacheCurrent(sourcePath, cachePath))
-      continue;
-    try {
-      fs.rmSync(cachePath, { force: true });
-    } catch {}
-  }
+// Format deviations of a video file (empty = fine), or null when it can't be probed.
+// Shares the probe cache with the stream start.
+export async function getVideoFormatIssues(filepath) {
+  const probe = await probeVideo(filepath);
+  return probe ? probe.formatIssues : null;
 }
 
 function pushLog(line) {
   logBuffer.push(line);
   if (logBuffer.length > MAX_LOG_LINES) logBuffer.shift();
   sessionLogLines.push(line);
+  // A misbehaving ffmpeg can warn many times per second for days: keep the start (cause)
+  // and the end (latest state) of the session and drop lines from the middle.
+  if (sessionLogLines.length > SESSION_LOG_MAX_LINES) {
+    sessionLogLines.splice(
+      SESSION_LOG_KEEP_HEAD,
+      5_000,
+      '[... log lines omitted ...]',
+    );
+  }
+}
+
+// Reconnect loops create one log file per ffmpeg run; keep only the newest ones.
+function pruneLogFiles() {
+  try {
+    const files = fs
+      .readdirSync(LOGS_DIR)
+      .filter((name) => /^stream-.*\.txt$/.test(name))
+      .sort()
+      .reverse();
+    for (const name of files.slice(MAX_LOG_FILES)) {
+      fs.rmSync(path.join(LOGS_DIR, name), { force: true });
+    }
+  } catch {}
 }
 
 // Dumps the full ffmpeg log of the just-ended session to a timestamped .txt file.
@@ -370,11 +273,80 @@ function writeSessionLogFile(code, signal) {
     const filePath = path.join(LOGS_DIR, `stream-${stamp}.txt`);
     const header = `ffmpeg exited (code=${code}, signal=${signal}) at ${new Date().toISOString()}\n\n`;
     fs.writeFileSync(filePath, header + sessionLogLines.join('\n') + '\n');
+    pruneLogFiles();
   } catch (err) {
     console.error('Failed to write ffmpeg session log:', err.message);
   } finally {
     sessionLogLines = [];
   }
+}
+
+// Asks ffmpeg to stop and escalates to a hard kill if it does not exit in time, so a hung
+// process can never block restarts ("a stream is already running") forever.
+function terminateFfmpeg() {
+  const proc = ffmpegProcess;
+  if (!proc) return;
+  try {
+    proc.kill('SIGINT');
+  } catch {}
+  const timer = setTimeout(() => {
+    if (ffmpegProcess !== proc) return;
+    pushLog('ffmpeg did not exit in time; killing it.');
+    try {
+      proc.kill('SIGKILL');
+    } catch {}
+  }, KILL_ESCALATION_MS);
+  timer.unref?.();
+}
+
+// ffmpeg is a child of this server but keeps publishing if the server dies. Stop it on
+// shutdown, and remove a leftover one (hard crash, dev restart) when the server starts.
+const FFMPEG_PID_FILE = path.join(
+  path.resolve(config.VIDEOS_DIR),
+  '.ffmpeg.pid',
+);
+
+function killLeftoverFfmpeg() {
+  let pid;
+  try {
+    pid = Number(fs.readFileSync(FFMPEG_PID_FILE, 'utf8'));
+    fs.rmSync(FFMPEG_PID_FILE, { force: true });
+  } catch {
+    return;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid, 0);
+    const isFfmpeg =
+      process.platform === 'win32'
+        ? execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'])
+            .toString()
+            .toLowerCase()
+            .includes('ffmpeg')
+        : fs.readFileSync(`/proc/${pid}/comm`, 'utf8').includes('ffmpeg');
+    if (isFfmpeg) process.kill(pid, 'SIGKILL');
+  } catch {}
+}
+
+function killFfmpegNow() {
+  try {
+    ffmpegProcess?.kill('SIGKILL');
+  } catch {}
+  try {
+    fs.rmSync(FFMPEG_PID_FILE, { force: true });
+  } catch {}
+}
+
+killLeftoverFfmpeg();
+process.on('exit', killFfmpegNow);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGUSR2']) {
+  try {
+    process.once(signal, () => {
+      activeStreamConfig = null;
+      killFfmpegNow();
+      process.kill(process.pid, signal); // continue with the default shutdown
+    });
+  } catch {}
 }
 
 function getLogFileInfo(filename) {
@@ -451,7 +423,7 @@ export function listVideoFiles() {
     .sort((a, b) => a.localeCompare(b));
 }
 
-// Builds the ffmpeg concat playlist string from the DB Ã¢â‚¬â€ no file written.
+// Builds the ffmpeg concat playlist string from the DB - no file written.
 function buildPlaylistContent() {
   const { playlistSource, shuffleMode } = db.getSettings();
   const filter =
@@ -538,43 +510,42 @@ function setLoopPlaylistState(entries, durations, resumeOffset = 0) {
   }
 }
 
+// Playlist edits made while streaming apply at the next ffmpeg start (reconnect or
+// scheduled restart): one ffmpeg run reads a fixed playlist file, and restarting it just
+// to pick up a change would drop the Twitch connection. Always reports "not applied".
 export async function refreshActivePlaylist() {
-  const playlistPath = activeLoopPlaylistPath;
-  if (!ffmpegProcess || !playlistPath) return false;
-
-  const { entries } = buildPlaylistContent();
-  const durations = await Promise.all(
-    entries.map(async ({ filename }) => {
-      const probe = await probeVideo(path.resolve(VIDEOS_DIR, filename));
-      return probe?.duration ?? null;
-    }),
-  );
-
-  if (!ffmpegProcess || activeLoopPlaylistPath !== playlistPath) return false;
-
-  const escapeName = (name) => name.replace(/'/g, "'\\''");
-  const entryLines = entries
-    .map(({ filename }, index) => {
-      const duration = durations[index];
-      let line = `file '${escapeName(filename)}'`;
-      if (duration != null) line += `\nduration ${duration}`;
-      return line;
-    })
-    .join('\n');
-  const playlistFilename = path.basename(playlistPath);
-  writePlaylistFile(
-    playlistPath,
-    `ffconcat version 1.0\n${entryLines}\nfile '${escapeName(playlistFilename)}'\n`,
-  );
-  pendingLoopPlaylistState = { entries, durations };
-  pushLog(
-    `Playlist updated; ${entries.length} item(s) will play in the next loop.`,
-  );
-  return true;
+  return false;
 }
-
 function isRunning() {
   return ffmpegProcess !== null;
+}
+
+// Checks every video of the playlist once (at application start), so the format status is
+// known before the first stream start: it fills the probe cache - the media library and the
+// stream start then answer from the cache - and lists the videos the stream would skip.
+export async function checkPlaylistFormats() {
+  const entries = db.getPlaylist().filter((entry) => entry.status === 'ready');
+  const probes = await mapLimit(entries, MAX_PROBE_PARALLELISM, ({ filename }) =>
+    probeVideo(path.resolve(VIDEOS_DIR, filename)),
+  );
+  const problems = [];
+  entries.forEach((entry, i) => {
+    const probe = probes[i];
+    const issues = !probe
+      ? ['file missing or unreadable']
+      : !(probe.duration > 0)
+        ? ['no duration']
+        : probe.formatIssues;
+    if (issues.length > 0)
+      problems.push({ title: entry.title || entry.filename, filename: entry.filename, issues });
+  });
+  console.log(
+    `[FORMAT-CHECK] ${entries.length} playlist video(s) checked, ${problems.length} not streamable.`,
+  );
+  for (const { title, filename, issues } of problems) {
+    console.log(`[FORMAT-CHECK]   "${title}" (${filename}): ${issues.join(', ')}`);
+  }
+  return problems;
 }
 
 // Position inside the current video is derived from the encoder progress, the same basis
@@ -620,36 +591,95 @@ export function getStatus() {
     videoCount: listVideoFiles().length,
     currentVideo: isRunning() ? currentVideoFilename || null : null,
     currentSegment: isRunning() ? getCurrentSegment() : null,
+    skippedVideos: isRunning() ? skippedVideos : [],
   };
 }
 
 const PACKET_NOISE_RE = /\bpts[=:]\s*[-\d]|\bdts[=:]\s*[-\d]|\bpos[=:]\s*\d/;
 
-export async function startStream({
-  twitchServer,
-  streamKey,
-  loop = true,
-  videoBitrateKbps = 6000,
-  audioBitrateKbps = 128,
-  streamFps = 60,
-  encoderPreset = 'veryfast',
-  restartIntervalSeconds = 169200,
-  restartDelaySeconds = 5,
-  resumeFrom = null,
-}) {
+// Runs `fn` over `items` with at most `limit` calls in flight (keeps result order).
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next++;
+        results[index] = await fn(items[index], index);
+      }
+    }),
+  );
+  return results;
+}
+
+export async function startStream(options) {
   if (isRunning())
     throw new Error(
       'A stream is already running. Stop it before starting a new one.',
     );
+  if (startingStream)
+    throw new Error('A stream start is already in progress.');
+  startingStream = true;
+  try {
+    return await startStreamUnlocked(options, startGeneration);
+  } finally {
+    startingStream = false;
+  }
+}
+
+async function startStreamUnlocked(
+  {
+    twitchServer,
+    streamKey,
+    loop = true,
+    videoBitrateKbps = 6000,
+    audioBitrateKbps = 128,
+    streamFps = 60,
+    encoderPreset = 'veryfast',
+    restartIntervalSeconds = 169200,
+    restartDelaySeconds = 5,
+    resumeFrom = null,
+  },
+  generation,
+) {
   if (!streamKey) throw new Error('No Twitch stream key configured.');
   const keyframeIntervalFrames = streamFps * 2;
   clearReconnectTimer();
   clearScheduledRestartTimer();
   scheduledRestartRequested = false;
   offlineRestartRequested = false;
+  if (!resumeFrom) consecutiveFailures = 0;
   removeStalePlaylistFiles();
 
-  const { entries: playlistEntries } = buildPlaylistContent();
+  const { entries: allEntries } = buildPlaylistContent();
+  // Only videos ffmpeg can actually play in sequence go into the run: a missing or
+  // unreadable file would make ffmpeg exit again and again, and a video that is not in the
+  // common streaming format (see utils/video-format.js) gets wrong timestamps from the
+  // concat demuxer. Those are left out on purpose; the media library marks the latter.
+  // Checked on every start because files may be added, replaced or deleted at any time.
+  const allProbes = await mapLimit(
+    allEntries,
+    MAX_PROBE_PARALLELISM,
+    ({ filename }) => probeVideo(path.resolve(VIDEOS_DIR, filename)),
+  );
+  const skippedEntries = [];
+  const playlistEntries = [];
+  allEntries.forEach((entry, i) => {
+    const probe = allProbes[i];
+    const issues = !probe
+      ? ['file missing or unreadable']
+      : !(probe.duration > 0)
+        ? ['no duration']
+        : probe.formatIssues;
+    if (issues.length > 0) skippedEntries.push({ entry, issues });
+    else playlistEntries.push(entry);
+  });
+  if (playlistEntries.length === 0)
+    throw new Error(
+      'No playable video in the playlist: all of them are missing or not in the streaming format. Re-upload or re-import the videos marked in the media library.',
+    );
+  // stopStream() may have been called while the files were being probed.
+  if (generation !== startGeneration) return getStatus();
   const resumeIndex = resumeFrom
     ? playlistEntries.findIndex(
         (entry) => entry.filename === resumeFrom.filename,
@@ -674,7 +704,7 @@ export async function startStream({
   outputTsOffsetSecs = outputTsOffset;
   const target = `${twitchServer.replace(/\/+$/, '')}/${streamKey}`;
 
-  activeStreamConfig = {
+  const nextStreamConfig = {
     twitchServer,
     streamKey,
     loop,
@@ -686,19 +716,15 @@ export async function startStream({
     restartDelaySeconds,
   };
 
-  // Pre-fetch durations/resolutions so the concat playlist can include explicit duration lines
-  // (prevents non-monotonic DTS at file boundaries) and for transition tracking.
-  const probes = await Promise.all(
-    entries.map(({ filename }) =>
-      probeVideo(path.resolve(VIDEOS_DIR, filename)),
-    ),
+  // Durations/resolutions (already probed above, cached) so the concat playlist can include
+  // explicit duration lines (prevents non-monotonic DTS at file boundaries) and for
+  // transition tracking.
+  const probeByFilename = new Map(
+    allEntries.map(({ filename }, i) => [filename, allProbes[i]]),
   );
-  const durations = probes.map((p) => p?.duration ?? null);
+  const probes = entries.map(({ filename }) => probeByFilename.get(filename));
+  const durations = probes.map((p) => p.duration);
 
-  removeOrphanedCacheFiles();
-  const playableNames = await getPlayableNames(entries, probes);
-  // stopStream() may have been called while files were being converted.
-  if (!activeStreamConfig) return getStatus();
   // Never resume past the end of the file (stale offsets would create an empty segment).
   if (resumeOffset > 0 && durations[0] != null) {
     resumeOffset = Math.min(resumeOffset, Math.max(durations[0] - 0.5, 0));
@@ -727,10 +753,10 @@ export async function startStream({
   // ffconcat v1.0 with per-file duration lines lets the demuxer calculate exact timestamp offsets.
   const entryLines = (inpoint) =>
     entries
-      .map((_, i) => {
+      .map(({ filename }, i) => {
         const dur = durations[i];
         const ip = i === 0 ? inpoint : 0;
-        let s = `file '${escapeName(playableNames[i])}'`;
+        let s = `file '${escapeName(filename)}'`;
         if (ip > 0) s += `\ninpoint ${ip}`;
         if (dur != null) s += `\nduration ${Math.max(dur - ip, 0)}`;
         return s;
@@ -762,9 +788,8 @@ export async function startStream({
     ...Array.from({ length: repeats - 1 }, () => entryLines(0)),
   ].join('\n')}\n`;
   writePlaylistFile(playlistPath, content);
-  // Mid-stream playlist edits apply at the next ffmpeg restart.
-  activeLoopPlaylistPath = null;
-  pendingLoopPlaylistState = null;
+  // Playback time of this run's playlist (the resumed first file is shortened).
+  const runDurationSecs = cycleSecs * repeats - resumeOffset;
 
   const baseArgs = [
     '-loglevel',
@@ -790,7 +815,7 @@ export async function startStream({
   // OBS paces frames from a fixed frame counter (frame_time = N / fps) rather than trusting
   // source timestamps. `scale`+`pad`+`setsar` normalize every source to the fixed canvas,
   // `fps` normalizes to the configured FPS, `setpts`/`asetpts` rebuild presentation timestamps
-  // purely from the output sample count, and `format` pins the pixel format Ã¢â‚¬â€ this guarantees a
+  // purely from the output sample count, and `format` pins the pixel format - this guarantees a
   // perfectly monotonic, evenly spaced, constant-parameter stream regardless of how the
   // concatenated source files were encoded (mixed resolution/fps/pix_fmt/timestamps no longer
   // reach the encoder or Twitch).
@@ -883,14 +908,34 @@ export async function startStream({
 
   logBuffer = [];
   sessionLogLines = [];
+  skippedVideos = skippedEntries.map(({ entry, issues }) => ({
+    filename: entry.filename,
+    title: entry.title || entry.filename,
+    ...explainFormatIssues(issues),
+  }));
   pushLog(`Starting stream with ${entries.length} item(s)`);
+  for (const { entry, issues } of skippedEntries) {
+    pushLog(
+      `Skipped "${entry.title || entry.filename}" (${entry.filename}): ${issues.join(', ')}.`,
+    );
+  }
 
-  // stdin not needed Ã¢â‚¬â€ input comes from the temp file. cwd doubles as a fallback for
+  // stdin not needed: input comes from the playlist file. cwd doubles as a fallback for
   // resolving the playlist's relative entries.
-  ffmpegProcess = spawn(FFMPEG_PATH, args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    cwd: path.resolve(VIDEOS_DIR),
-  });
+  try {
+    ffmpegProcess = spawn(FFMPEG_PATH, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: path.resolve(VIDEOS_DIR),
+    });
+  } catch (err) {
+    fs.rmSync(playlistPath, { force: true });
+    throw err;
+  }
+  const thisProcess = ffmpegProcess;
+  activeStreamConfig = nextStreamConfig;
+  try {
+    fs.writeFileSync(FFMPEG_PID_FILE, String(thisProcess.pid ?? ''));
+  } catch {}
   startedAt = new Date().toISOString();
   lastExit = null;
   lastProgressAt = Date.now();
@@ -911,11 +956,11 @@ export async function startStream({
       pushLog(
         'Scheduled restart reached; stopping ffmpeg at the current video position.',
       );
-      ffmpegProcess.kill('SIGINT');
+      terminateFfmpeg();
     }, restartIntervalSeconds * 1000);
   }
 
-  // Populate transition state from pre-fetched durations Ã¢â‚¬â€ no second ffprobe needed.
+  // Populate transition state from the probed durations.
   resetTransitionState();
   loopFirstFile = entries[0].filename;
   currentVideoFilename = entries[0].filename;
@@ -929,8 +974,10 @@ export async function startStream({
     cycleOffset = -resumeOffset;
   }
 
+  // "resumed" keeps the metadata already active on Twitch; it only applies when the video
+  // that was playing is still in the playlist and playback continues inside it.
   streamEvents.emit('videoChanged', entries[0].filename, {
-    resumed: Boolean(resumeFrom),
+    resumed: resumeIndex >= 0,
     offset: resumeOffset,
   });
 
@@ -991,8 +1038,15 @@ export async function startStream({
     }
   });
 
-  ffmpegProcess.on('exit', async (code, signal) => {
+  thisProcess.on('exit', (code, signal) => {
     const restartConfig = activeStreamConfig;
+    const ranMs = startedAt ? Date.now() - Date.parse(startedAt) : 0;
+    // Release the process slot first so nothing below can leave the manager "running".
+    ffmpegProcess = null;
+    startedAt = null;
+    try {
+      fs.rmSync(FFMPEG_PID_FILE, { force: true });
+    } catch {}
     stopLiveCheck();
     const isScheduledRestart = scheduledRestartRequested;
     const isOfflineRestart = offlineRestartRequested;
@@ -1000,11 +1054,23 @@ export async function startStream({
     offlineRestartRequested = false;
     if (isScheduledRestart) lastScheduledRestartMs = Date.now();
     clearScheduledRestartTimer();
+    // A clean exit only counts as "playlist played to the end" if the encoder actually got
+    // (almost) through the whole playlist; Windows reports code 0 for some killed processes.
     const playlistFinished =
-      code === 0 && !signal && !isScheduledRestart && !isOfflineRestart;
+      code === 0 &&
+      !signal &&
+      !isScheduledRestart &&
+      !isOfflineRestart &&
+      lastOutputTimeSecs >= runDurationSecs - 15;
+    // Runs that die quickly (bad key, no network, unreadable files) back off instead of
+    // hammering Twitch and the disk; a healthy run resets the counter.
+    if (ranMs >= MIN_HEALTHY_RUN_MS) consecutiveFailures = 0;
+    else if (!isScheduledRestart) consecutiveFailures++;
     if (restartConfig && playlistFinished) {
       if (!restartConfig.loop) {
         activeStreamConfig = null;
+        resumeState = null;
+        streamEvents.emit('streamStopped');
       } else {
         // Whole playlist played: start the next cycle from the first entry while keeping
         // the output timestamps continuous so Twitch sees one uninterrupted broadcast.
@@ -1031,8 +1097,6 @@ export async function startStream({
     }
     clearVideoChangeTimers();
     resetTransitionState();
-    activeLoopPlaylistPath = null;
-    pendingLoopPlaylistState = null;
     for (const p of playlistPaths) {
       try {
         fs.unlinkSync(p);
@@ -1046,50 +1110,79 @@ export async function startStream({
       );
     }
     writeSessionLogFile(code, signal);
-    ffmpegProcess = null;
-    startedAt = null;
     if (!restartConfig || !activeStreamConfig) return;
 
     const reconnectDelaySeconds = isScheduledRestart
       ? restartConfig.restartDelaySeconds
-      : playlistFinished
+      : playlistFinished && consecutiveFailures === 0
         ? 0
-        : 2;
+        : reconnectBackoffSeconds();
     pushLog(
       isScheduledRestart
         ? `Scheduled restart; resuming in ${reconnectDelaySeconds} seconds.`
-        : playlistFinished
+        : playlistFinished && consecutiveFailures === 0
           ? 'Playlist finished; starting the next loop.'
           : `RTMP connection ended; reconnecting in ${reconnectDelaySeconds} seconds.`,
     );
-
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (!activeStreamConfig || isRunning()) return;
-      startStream({ ...restartConfig, resumeFrom: resumeState })
-        .then(() => {
-          resumeState = null;
-        })
-        .catch((err) => {
-          pushLog(`Reconnect failed: ${err.message}`);
-        });
-    }, reconnectDelaySeconds * 1000);
+    scheduleReconnect(reconnectDelaySeconds);
   });
 
-  ffmpegProcess.on('error', (err) => {
+  thisProcess.on('error', (err) => {
+    pushLog(`ffmpeg error: ${err.message}`);
+    // Only a process that never started is final; otherwise 'exit' follows and reconnects.
+    if (thisProcess.pid !== undefined) return;
     stopLiveCheck();
     clearScheduledRestartTimer();
-    pushLog(`Failed to start ffmpeg: ${err.message}`);
-    activeLoopPlaylistPath = null;
-    pendingLoopPlaylistState = null;
+    for (const p of playlistPaths) {
+      try {
+        fs.unlinkSync(p);
+      } catch {}
+    }
     ffmpegProcess = null;
     startedAt = null;
+    activeStreamConfig = null;
+    resumeState = null;
+    clearReconnectTimer();
+    pushLog('ffmpeg could not be started; check FFMPEG_PATH. Stream stopped.');
+    writeSessionLogFile(null, null);
+    streamEvents.emit('streamStopped');
   });
 
   return getStatus();
 }
 
+function reconnectBackoffSeconds() {
+  return Math.min(
+    MAX_RECONNECT_DELAY_SECS,
+    2 * 2 ** Math.max(0, consecutiveFailures - 1),
+  );
+}
+
+// Starts the stream again (from the saved resume point) after `delaySeconds`. A failed
+// attempt - e.g. a file that vanished or a transient error - is retried with backoff, so
+// the stream recovers by itself as soon as the cause is gone.
+function scheduleReconnect(delaySeconds) {
+  clearReconnectTimer();
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    const config = activeStreamConfig;
+    if (!config || isRunning()) return;
+    startStream({ ...config, resumeFrom: resumeState })
+      .then(() => {
+        resumeState = null;
+      })
+      .catch((err) => {
+        pushLog(`Reconnect failed: ${err.message}`);
+        consecutiveFailures++;
+        if (activeStreamConfig && !isRunning() && !reconnectTimer)
+          scheduleReconnect(reconnectBackoffSeconds());
+      });
+  }, delaySeconds * 1000);
+}
+
 export function stopStream() {
+  startGeneration++; // cancels a start that is still probing files
+  consecutiveFailures = 0;
   clearVideoChangeTimers();
   clearReconnectTimer();
   clearScheduledRestartTimer();
@@ -1098,9 +1191,9 @@ export function stopStream() {
   resetTransitionState();
   activeStreamConfig = null; // prevent the exit handler from restarting
   resumeState = null;
-  if (!isRunning()) return getStatus();
-  ffmpegProcess.kill('SIGINT');
   streamEvents.emit('streamStopped');
+  if (!isRunning()) return getStatus();
+  terminateFfmpeg();
   return getStatus();
 }
 
@@ -1126,18 +1219,12 @@ export function handleStreamOffline() {
       'Twitch reported the stream offline; restarting ffmpeg at the current video position.',
     );
     offlineRestartRequested = true;
-    ffmpegProcess.kill('SIGINT');
+    terminateFfmpeg();
     return { restarted: true };
   }
 
   // ffmpeg is gone and no reconnect is scheduled (e.g. an earlier reconnect failed).
   pushLog('Twitch reported the stream offline; restarting from resume point.');
-  startStream({ ...activeStreamConfig, resumeFrom: resumeState })
-    .then(() => {
-      resumeState = null;
-    })
-    .catch((err) => {
-      pushLog(`Restart after offline failed: ${err.message}`);
-    });
+  scheduleReconnect(0);
   return { restarted: true };
 }
