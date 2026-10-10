@@ -621,6 +621,7 @@ async function runTrim(name, filePath, req, res, state) {
     });
   }
   writeTranscript(name, updatedTranscript);
+  streamManager.removeStreamCacheFor(name);
 
   // Build a fresh thumbnail from the trimmed video so the library doesn't keep
   // showing a frame that may have been cut out.
@@ -660,6 +661,7 @@ videosRouter.delete('/videos/:name', (req, res) => {
   if (!fs.existsSync(filePath))
     return res.status(404).json({ error: 'File not found' });
   fs.unlinkSync(filePath);
+  streamManager.removeStreamCacheFor(name);
   const thumbPath = path.join(THUMBS_DIR, `${name}.jpg`);
   if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
   const transcriptPath = path.join(TRANSCRIPTS_DIR, `${name}.json`);

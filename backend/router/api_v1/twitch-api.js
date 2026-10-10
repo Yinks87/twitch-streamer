@@ -291,6 +291,33 @@ twitchApiRouter.get('/twitch/categories', requireAuth, async (req, res) => {
   }
 });
 
+// Twitch's own creation date of a VOD/clip (ISO 8601). Looked up server-side so it doesn't
+// depend on the client; the date sent by the client is only a fallback.
+async function resolveTwitchCreatedAt(req, kind, remoteId) {
+  try {
+    const url = new URL(
+      kind === 'clip'
+        ? 'https://api.twitch.tv/helix/clips'
+        : 'https://api.twitch.tv/helix/videos',
+    );
+    url.searchParams.set('id', remoteId);
+    const r = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${req.user.access_token}`,
+        'Client-Id': TWITCH_CLIENT_ID,
+      },
+    });
+    const data = await r.json();
+    const createdAt = data?.data?.[0]?.created_at;
+    if (r.ok && createdAt && !Number.isNaN(Date.parse(createdAt)))
+      return new Date(createdAt).toISOString();
+  } catch {}
+  const fallback = req.body?.created_at;
+  return typeof fallback === 'string' && !Number.isNaN(Date.parse(fallback))
+    ? new Date(fallback).toISOString()
+    : null;
+}
+
 // Shared by VOD and clip imports: downloads `sourceUrl` via yt-dlp into a staging
 // directory, tracks progress, and moves the finished file into VIDEOS_DIR on success.
 async function importRemoteVideo(
@@ -357,10 +384,19 @@ async function importRemoteVideo(
     ],
   };
 
+  const twitchCreatedAt = await resolveTwitchCreatedAt(req, kind, remoteId);
+
   let entry;
   if (existing) {
-    db.updatePlaylistEntry(existing.id, { status: 'downloading' });
-    entry = { ...existing, status: 'downloading' };
+    db.updatePlaylistEntry(existing.id, {
+      status: 'downloading',
+      ...(twitchCreatedAt ? { twitch_created_at: twitchCreatedAt } : {}),
+    });
+    entry = {
+      ...existing,
+      status: 'downloading',
+      twitch_created_at: twitchCreatedAt ?? existing.twitch_created_at,
+    };
   } else {
     entry = db.addPlaylistEntry({
       source: kind,
@@ -368,6 +404,7 @@ async function importRemoteVideo(
       filename,
       vodId: remoteId,
       enabled: !transcriptNeedsCategory(meta),
+      twitchCreatedAt,
     });
     db.updatePlaylistEntry(entry.id, { status: 'downloading' });
     entry.status = 'downloading';

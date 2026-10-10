@@ -13,7 +13,7 @@ import {
   sendChatMessage,
   startAccessTokenValidationLoop,
 } from './twitch/api.js';
-import { readTranscript } from './utils/transcript.js';
+import { readTranscript, parseTimestamp } from './utils/transcript.js';
 import { parseTemplate } from './utils/template-parser.js';
 import { connectToTwitchEventSubs } from './twitch/event-subs/eventsubs.js';
 
@@ -76,14 +76,6 @@ app.listen(PORT, () => {
 });
 
 // ── Twitch channel auto-update on video change ────────────────────────────────
-
-function parseTimestamp(t) {
-  if (!t) return 0;
-  const parts = String(t).split(':').map(Number);
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  return Number(t) || 0;
-}
 
 let pendingTimestampTimeouts = [];
 

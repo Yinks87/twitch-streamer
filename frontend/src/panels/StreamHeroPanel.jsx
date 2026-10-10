@@ -112,6 +112,8 @@ const StreamHeroPanel = ({
         ?.title || status.currentVideo
     : null;
 
+  const segment = status.running ? status.currentSegment : null;
+
   return (
     <CollapsiblePanel
       storageKey="stream"
@@ -147,8 +149,17 @@ const StreamHeroPanel = ({
               `${readyPlaylist.length} Item(s) in der Playlist`
             )}
           </HeroDetail>
-          {currentVideoTitle && (
-            <NowPlaying>Läuft gerade: {currentVideoTitle}</NowPlaying>
+          {segment && (
+            <SegmentList>
+              <dt>Abschnitt:</dt>
+              <dd>
+                {segment.index + 1}/{segment.total}
+              </dd>
+              <dt>Titel:</dt>
+              <dd>{segment.title || '–'}</dd>
+              <dt>Kategorie:</dt>
+              <dd>{segment.category || '–'}</dd>
+            </SegmentList>
           )}
         </HeroBody>
       </HeroStateWrapper>
@@ -329,6 +340,26 @@ const NowPlaying = styled.p`
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text);
+`;
+
+const SegmentList = styled.dl`
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 0.75rem;
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+
+  dt {
+    color: var(--text-dim);
+  }
+
+  dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-weight: 600;
+    color: var(--text);
+  }
 `;
 
 const PlaylistChangeNotice = styled.div`

@@ -60,7 +60,8 @@ const migrations = [
           vod_id     TEXT,
           status     TEXT    NOT NULL DEFAULT 'ready',
           enabled    INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+          created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+          twitch_created_at TEXT,
         );
       `);
     },
@@ -120,6 +121,19 @@ const migrations = [
         db.exec(
           'ALTER TABLE settings ADD COLUMN max_concurrent_merges INTEGER NOT NULL DEFAULT 1',
         );
+    },
+  },
+
+  {
+    version: 5,
+    name: 'add_playlist_twitch_created_at',
+    up: (db) => {
+      const playlistColumns = db
+        .prepare('PRAGMA table_info(playlist)')
+        .all()
+        .map((column) => column.name);
+      if (!playlistColumns.includes('twitch_created_at'))
+        db.exec('ALTER TABLE playlist ADD COLUMN twitch_created_at TEXT');
     },
   },
 

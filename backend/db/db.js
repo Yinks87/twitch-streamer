@@ -338,21 +338,30 @@ export function addPlaylistEntry({
   filename,
   vodId = null,
   enabled = 1,
+  twitchCreatedAt = null,
 }) {
   const { mp } = db.prepare('SELECT MAX(position) as mp FROM playlist').get();
   const position = (mp ?? -1) + 1;
   const result = db
     .prepare(
-      `INSERT INTO playlist (source, title, filename, vod_id, position, status, enabled) VALUES (?, ?, ?, ?, ?, 'ready', ?)`,
+      `INSERT INTO playlist (source, title, filename, vod_id, position, status, enabled, twitch_created_at) VALUES (?, ?, ?, ?, ?, 'ready', ?, ?)`,
     )
-    .run(source, title, filename, vodId, position, enabled ? 1 : 0);
+    .run(
+      source,
+      title,
+      filename,
+      vodId,
+      position,
+      enabled ? 1 : 0,
+      twitchCreatedAt,
+    );
   return db
     .prepare('SELECT * FROM playlist WHERE id = ?')
     .get(result.lastInsertRowid);
 }
 
 export function updatePlaylistEntry(id, fields) {
-  const allowed = ['status', 'enabled', 'position', 'title'];
+  const allowed = ['status', 'enabled', 'position', 'title', 'twitch_created_at'];
   const keys = Object.keys(fields).filter((k) => allowed.includes(k));
   if (keys.length === 0) return;
   db.prepare(

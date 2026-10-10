@@ -1,12 +1,6 @@
 const BASE = '/api/v1';
 import axios from 'axios';
 
-async function handle(res) {
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok)
-    throw new Error(data.error || `Request failed with status ${res.status}`);
-  return data;
-}
 
 const apiClient = axios.create({
   baseURL: BASE,
@@ -139,7 +133,7 @@ export const api = {
       .get(`/stream/logs/${encodeURIComponent(filename)}`)
       .then((res) => res.data),
   getLogFileDownloadUrl: (filename) =>
-    `/stream/logs/${encodeURIComponent(filename)}/download`,
+    `${BASE}/stream/logs/${encodeURIComponent(filename)}/download`,
   deleteLogFile: (filename) =>
     apiClient
       .delete(`/stream/logs/${encodeURIComponent(filename)}`)

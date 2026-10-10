@@ -348,6 +348,7 @@ function PlayerPageContent() {
     try {
       await api.importVod(vod.id, vod.title, {
         muted_segments: vod.muted_segments,
+        created_at: vod.created_at,
       });
       await Promise.all([loadPlaylist(), loadVods()]);
       showAlert({
@@ -361,7 +362,9 @@ function PlayerPageContent() {
 
   async function handleImportClip(clip) {
     try {
-      await api.importClip(clip.id, clip.title);
+      await api.importClip(clip.id, clip.title, {
+        created_at: clip.created_at,
+      });
       await Promise.all([loadPlaylist(), loadClips()]);
       showAlert({
         severity: 'info',
