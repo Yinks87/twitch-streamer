@@ -72,7 +72,7 @@ async function runTokenValidation(user, access_token) {
     )
     .run(
       newAccessToken.access_token,
-      newAccessToken.refresh_token ?? user.refresh_token,
+      newAccessToken.refresh_token,
       new Date(
         Date.now() + (newAccessToken.expires_in ?? 3600) * 1000,
       ).toISOString(),
@@ -113,6 +113,7 @@ export async function refreshAccessToken(refresh_token) {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
     });
+    console.log('Refreshed access token:', data);
     return data;
   } catch (error) {
     throw new Error(

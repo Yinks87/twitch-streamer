@@ -161,7 +161,9 @@ twitchAuthRouter.get('/twitch/callback', async (req, res) => {
 
       // Runs in the background (it reconnects forever); a failure must not break the login.
       connectToTwitchEventSubs().catch((err) =>
-        console.error(`[EVENTSUB] Connection after login failed: ${err.message}`),
+        console.error(
+          `[EVENTSUB] Connection after login failed: ${err.message}`,
+        ),
       );
 
       // Auto-save stream key to settings
