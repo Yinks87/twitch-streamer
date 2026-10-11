@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import Thumbnail from '../components/Thumbnail';
@@ -49,6 +49,14 @@ function formatClipDuration(seconds) {
 
 function formatStorage(bytes) {
   return `${(Number(bytes || 0) / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function formatTranscriptTime(seconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainder = totalSeconds % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
 }
 
 // ── Shared "whose channel" picker for the VOD and Clip tabs — both lists depend on
@@ -288,6 +296,8 @@ function MediaLibraryItem({
   onTrimProgress,
 }) {
   const { showAlert } = useAlert();
+  const infoId = useId();
+  const [transcriptInfoOpen, setTranscriptInfoOpen] = useState(false);
   const storageKey = `twitch-streamer.mediathek.${video.name}`;
   const [expanded, setExpanded] = useState(
     () => window.localStorage.getItem(storageKey) === 'expanded',
@@ -442,6 +452,12 @@ function MediaLibraryItem({
 
   const tile = grid && !expanded;
   const displayTitle = video.transcript?.timestamps?.[0]?.title || video.name;
+  const transcriptTimestamps = Array.isArray(video.transcript?.timestamps)
+    ? video.transcript.timestamps
+    : [];
+  const mutedSegments = Array.isArray(video.transcript?.mutedSegments)
+    ? video.transcript.mutedSegments
+    : [];
   const thumbSrc = `/api/v1/thumbnails/${encodeURIComponent(video.name)}${
     reloadToken ? `?t=${reloadToken}` : ''
   }`;
@@ -467,6 +483,95 @@ function MediaLibraryItem({
 
   return (
     <ItemRow $tile={tile} $wide={grid && expanded}>
+      {!expanded && (
+        <TranscriptInfoControl
+          $tile={grid}
+          onMouseEnter={() => setTranscriptInfoOpen(true)}
+          onMouseLeave={() => setTranscriptInfoOpen(false)}
+          onFocus={() => setTranscriptInfoOpen(true)}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+              setTranscriptInfoOpen(false);
+            }
+          }}
+        >
+          <TranscriptInfoButton
+            type="button"
+            aria-label="Transkriptinformationen anzeigen"
+            aria-expanded={transcriptInfoOpen}
+            aria-controls={`transcript-info-${infoId}`}
+            onClick={() => setTranscriptInfoOpen((open) => !open)}
+          >
+            ?
+          </TranscriptInfoButton>
+          {transcriptInfoOpen && (
+            <TranscriptInfoCard
+              id={`transcript-info-${infoId}`}
+              role="region"
+              aria-label="Transkriptinformationen"
+            >
+              {transcriptTimestamps.length === 0 &&
+              mutedSegments.length === 0 ? (
+                <TranscriptInfoEmpty>
+                  Keine Transkriptinformationen vorhanden.
+                </TranscriptInfoEmpty>
+              ) : (
+                <>
+                  {transcriptTimestamps.length > 0 && (
+                    <TranscriptInfoSection>
+                      <TranscriptInfoHeading>Zeitstempel</TranscriptInfoHeading>
+                      {transcriptTimestamps.map((timestamp, index) => (
+                        <TranscriptInfoEntry
+                          key={`${timestamp.time || 'time'}-${index}`}
+                        >
+                          <TranscriptInfoTime>
+                            {timestamp.time || '00:00:00'}
+                          </TranscriptInfoTime>
+                          <div>
+                            <TranscriptInfoValue>
+                              Titel: {timestamp.title || 'Kein Titel'}
+                            </TranscriptInfoValue>
+                            <TranscriptInfoValue>
+                              Kategorie: {timestamp.category || 'Nicht gesetzt'}
+                            </TranscriptInfoValue>
+                            {timestamp.category_id != null && (
+                              <TranscriptInfoDetail>
+                                Twitch-Kategorie-ID: {timestamp.category_id}
+                              </TranscriptInfoDetail>
+                            )}
+                          </div>
+                        </TranscriptInfoEntry>
+                      ))}
+                    </TranscriptInfoSection>
+                  )}
+                  {mutedSegments.length > 0 && (
+                    <TranscriptInfoSection>
+                      <TranscriptInfoHeading>
+                        Stummgeschaltete Bereiche
+                      </TranscriptInfoHeading>
+                      {mutedSegments.map((segment, index) => (
+                        <TranscriptInfoEntry
+                          key={`${segment.offset}-${segment.duration}-${index}`}
+                        >
+                          <TranscriptInfoValue>
+                            {formatTranscriptTime(segment.offset)} –{' '}
+                            {formatTranscriptTime(
+                              Number(segment.offset) + Number(segment.duration),
+                            )}
+                          </TranscriptInfoValue>
+                          <TranscriptInfoDetail>
+                            Dauer: {formatTranscriptTime(segment.duration)}
+                          </TranscriptInfoDetail>
+                        </TranscriptInfoEntry>
+                      ))}
+                    </TranscriptInfoSection>
+                  )}
+                </>
+              )}
+            </TranscriptInfoCard>
+          )}
+        </TranscriptInfoControl>
+      )}
       <ItemHeader
         type="button"
         $tile={tile}
@@ -700,6 +805,7 @@ export default function MediaLibraryPanel({
 
   const [videoSort, setVideoSort] = useState('desc'); // 'desc' | 'asc'
   const [videoTypeFilter, setVideoTypeFilter] = useState('all'); // 'all' | 'upload' | 'vod' | 'clip'
+  const [transcriptSearch, setTranscriptSearch] = useState('');
   const [importFilter, setImportFilter] = useState('all'); // 'all' | 'imported' | 'not_imported'
 
   const matchesImportFilter = (item) =>
@@ -709,6 +815,7 @@ export default function MediaLibraryPanel({
       : item.importStatus !== 'ready');
 
   const [videoStatusFilter, setVideoStatusFilter] = useState('all'); // 'all' | 'active' | 'inactive' | 'incomplete'
+  const searchTerm = transcriptSearch.trim().toLocaleLowerCase('de-DE');
 
   const matchesVideoStatus = (video) => {
     if (videoStatusFilter === 'all') return true;
@@ -719,11 +826,34 @@ export default function MediaLibraryPanel({
     return videoNeedsCategory(video.transcript);
   };
 
+  const matchesTranscriptSearch = (video) => {
+    if (!searchTerm) return true;
+
+    const transcript = video.transcript || {};
+    const timestamps = Array.isArray(transcript.timestamps)
+      ? transcript.timestamps
+      : [];
+    const searchableText = [
+      transcript.title,
+      transcript.category,
+      ...timestamps.flatMap((timestamp) => [
+        timestamp?.title,
+        timestamp?.category,
+      ]),
+    ]
+      .filter((value) => typeof value === 'string')
+      .join(' ')
+      .toLocaleLowerCase('de-DE');
+
+    return searchableText.includes(searchTerm);
+  };
+
   const visibleVideos = videos
     .filter(
       (video) => videoTypeFilter === 'all' || video.source === videoTypeFilter,
     )
     .filter(matchesVideoStatus)
+    .filter(matchesTranscriptSearch)
     .slice()
     .sort((a, b) => {
       const diff = new Date(a.uploadedAt) - new Date(b.uploadedAt);
@@ -812,6 +942,14 @@ export default function MediaLibraryPanel({
         <>
           <Hint>Filtern und sortieren</Hint>
           <SourceRow>
+            <Input
+              type="search"
+              aria-label="Transkripte nach Titel oder Kategorie durchsuchen"
+              placeholder="Titel oder Kategorie suchen…"
+              value={transcriptSearch}
+              onChange={(e) => setTranscriptSearch(e.target.value)}
+              style={{ flex: '1 1 220px', minWidth: '180px' }}
+            />
             <Select
               value={videoTypeFilter}
               onChange={(e) => setVideoTypeFilter(e.target.value)}
@@ -844,7 +982,9 @@ export default function MediaLibraryPanel({
               <VideoListEmpty style={{ gridColumn: '1 / -1' }}>
                 {videos.length === 0
                   ? 'Noch keine Videos in der Mediathek vorhanden.'
-                  : 'Keine Videos für diesen Filter.'}
+                  : searchTerm
+                    ? 'Keine Videos für diese Suche und Filter.'
+                    : 'Keine Videos für diesen Filter.'}
               </VideoListEmpty>
             )}
             {visibleVideos.map((video) => (
@@ -1182,8 +1322,9 @@ function ItemsContainer({ $grid, children }) {
 const ItemRow = styled(VideoListItem)`
   display: block;
   padding: 0;
+  position: relative;
   /* Expanded rows must not clip the category autocomplete dropdown. */
-  overflow: ${({ $tile }) => ($tile ? 'hidden' : 'visible')};
+  overflow: visible;
 
   ${({ $tile }) =>
     $tile &&
@@ -1196,6 +1337,101 @@ const ItemRow = styled(VideoListItem)`
     }
   `}
   ${({ $wide }) => $wide && 'grid-column: 1 / -1;'}
+`;
+
+const TranscriptInfoControl = styled.div`
+  position: absolute;
+  z-index: 5;
+  top: ${({ $tile }) => ($tile ? '6px' : '50%')};
+  right: ${({ $tile }) => ($tile ? '6px' : '38px')};
+  transform: ${({ $tile }) => ($tile ? 'none' : 'translateY(-50%)')};
+`;
+
+const TranscriptInfoButton = styled.button`
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 50%;
+  background: rgba(21, 23, 27, 0.85);
+  color: var(--text);
+  font: 600 0.85rem var(--font-display);
+  cursor: help;
+
+  &:hover,
+  &:focus-visible {
+    border-color: var(--signal);
+    color: var(--signal);
+    outline: none;
+  }
+`;
+
+const TranscriptInfoCard = styled.div`
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 6;
+  width: min(320px, calc(100vw - 32px));
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  color: var(--text);
+  cursor: default;
+`;
+
+const TranscriptInfoSection = styled.section`
+  & + & {
+    margin-top: 0.75rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid var(--border);
+  }
+`;
+
+const TranscriptInfoHeading = styled.h3`
+  margin-bottom: 0.45rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+`;
+
+const TranscriptInfoEntry = styled.div`
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  padding: 0.35rem 0;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+
+  & + & {
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+`;
+
+const TranscriptInfoTime = styled.span`
+  color: var(--signal);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+`;
+
+const TranscriptInfoValue = styled.div`
+  color: var(--text);
+`;
+
+const TranscriptInfoDetail = styled.div`
+  margin-top: 0.15rem;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+`;
+
+const TranscriptInfoEmpty = styled.p`
+  color: var(--text-dim);
+  font-size: 0.78rem;
 `;
 
 const ItemHeader = styled.button`
@@ -1221,14 +1457,20 @@ const ItemHeader = styled.button`
 `;
 
 const StatusDot = styled.span`
-  width: 10px;
-  height: 10px;
+  width: ${({ $active }) => ($active ? '12px' : '10px')};
+  height: ${({ $active }) => ($active ? '12px' : '10px')};
   border-radius: 50%;
   flex-shrink: 0;
   background: ${({ $active }) =>
     $active ? 'var(--color-success, #4caf50)' : '#666'};
   box-shadow: ${({ $active }) =>
-    $active ? '0 0 0 3px rgba(76,175,80,.16)' : 'none'};
+    $active
+      ? '0 0 0 3px rgba(76,175,80,.24), 0 0 8px rgba(76,175,80,.35)'
+      : 'none'};
+  transition:
+    width 0.15s ease,
+    height 0.15s ease,
+    box-shadow 0.15s ease;
 `;
 
 const ToggleIcon = styled.span`

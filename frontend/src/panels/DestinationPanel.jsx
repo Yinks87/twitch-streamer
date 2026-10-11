@@ -20,7 +20,7 @@ export default function DestinationPanel({
   onSave,
 }) {
   return (
-    <CollapsiblePanel storageKey="destination" title="Sendeziel">
+    <CollapsiblePanel storageKey="destination" title="Stream und Video Einstellungen">
       <Hint style={{ color: 'var(--color-success, #4caf50)' }}>
         Stream-Key wurde nach dem Login automatisch geladen.
       </Hint>
