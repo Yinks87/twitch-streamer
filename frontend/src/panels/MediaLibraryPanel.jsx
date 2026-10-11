@@ -482,7 +482,11 @@ function MediaLibraryItem({
   );
 
   return (
-    <ItemRow $tile={tile} $wide={grid && expanded}>
+    <ItemRow
+      $tile={tile}
+      $wide={grid && expanded}
+      $infoOpen={!expanded && transcriptInfoOpen}
+    >
       {!expanded && (
         <TranscriptInfoControl
           $tile={grid}
@@ -1323,6 +1327,7 @@ const ItemRow = styled(VideoListItem)`
   display: block;
   padding: 0;
   position: relative;
+  z-index: ${({ $infoOpen }) => ($infoOpen ? 10 : 'auto')};
   /* Expanded rows must not clip the category autocomplete dropdown. */
   overflow: visible;
 
