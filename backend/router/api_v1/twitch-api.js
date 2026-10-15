@@ -435,7 +435,6 @@ async function importRemoteVideo(
   };
 
   const twitchCreatedAt = await resolveTwitchCreatedAt(req, kind, remoteId);
-  if (twitchCreatedAt) meta.twitchCreatedAt = twitchCreatedAt;
 
   let entry;
   if (existing) {

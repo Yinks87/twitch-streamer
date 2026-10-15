@@ -71,8 +71,6 @@ export const TileMedia = styled.div`
   width: 100%;
   aspect-ratio: 16 / 9;
   background: #111;
-  border-radius: 5px 5px 0 0;
-  overflow: hidden;
 `;
 
 export const TileOverlay = styled.div`

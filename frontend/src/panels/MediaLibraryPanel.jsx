@@ -480,12 +480,6 @@ function MediaLibraryItem({
       }
     />
   );
-  const twitchCreatedAt =
-    video.transcript?.twitchCreatedAt || playlistEntry?.twitch_created_at;
-  const formatDate = (date) =>
-    date && Number.isFinite(new Date(date).getTime())
-      ? new Date(date).toLocaleString('de-DE')
-      : '–';
 
   return (
     <ItemRow
@@ -519,7 +513,6 @@ function MediaLibraryItem({
               id={`transcript-info-${infoId}`}
               role="region"
               aria-label="Transkriptinformationen"
-              $tile={grid}
             >
               {transcriptTimestamps.length === 0 &&
               mutedSegments.length === 0 ? (
@@ -593,38 +586,15 @@ function MediaLibraryItem({
           <>
             <TileMedia>
               <Thumbnail src={thumbSrc} alt="" fluid />
+              <TileOverlay>{statusDot}</TileOverlay>
             </TileMedia>
             <TileBody>
-              <TileType>
-                <TileMeta>Typ:</TileMeta>
-                <SourceBadge $kind={video.source}>
-                  {SOURCE_LABELS[video.source] || 'Upload'}
-                </SourceBadge>
-              </TileType>
-              <TileMeta>
-                Dauer: {video.duration == null
-                  ? '00:00:00'
-                  : formatTranscriptTime(video.duration)}
-              </TileMeta>
-              <TileMeta>Hinzugefügt: {formatDate(video.uploadedAt)}</TileMeta>
-              <TileMeta>
-                Twitch erstellt: {formatDate(twitchCreatedAt)}
-              </TileMeta>
+              <TileTitle title={displayTitle}>{displayTitle}</TileTitle>
               {trimProgress && (
                 <TrimProgressStatus trimProgress={trimProgress} />
               )}
               {needsCategory && <Warning>Transkript unvollständig</Warning>}
               {formatWarning}
-              <TileStatus>
-                {statusDot}
-                <TileMeta>
-                  {isActive
-                    ? 'Aktiv'
-                    : playlistEntry
-                      ? 'Deaktiviert'
-                      : 'Nicht in Playlist'}
-                </TileMeta>
-              </TileStatus>
             </TileBody>
           </>
         ) : (
@@ -1374,34 +1344,10 @@ const ItemRow = styled(VideoListItem)`
   ${({ $wide }) => $wide && 'grid-column: 1 / -1;'}
 `;
 
-const SOURCE_BADGE_COLORS = {
-  vod: '#9147ff',
-  clip: '#3b9eff',
-};
-
-const SourceBadge = styled.span`
-  font-size: 0.7rem;
-  padding: 0.1rem 0.35rem;
-  border-radius: 3px;
-  background: ${({ $kind }) =>
-    SOURCE_BADGE_COLORS[$kind]
-      ? `${SOURCE_BADGE_COLORS[$kind]}22`
-      : '#00000022'};
-  color: ${({ $kind }) => SOURCE_BADGE_COLORS[$kind] ?? 'inherit'};
-  flex-shrink: 0;
-`;
-
-const TileType = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-`;
-
 const TranscriptInfoControl = styled.div`
   position: absolute;
   z-index: 5;
-  top: ${({ $tile }) => ($tile ? 'auto' : '50%')};
-  bottom: ${({ $tile }) => ($tile ? '6px' : 'auto')};
+  top: ${({ $tile }) => ($tile ? '6px' : '50%')};
   right: ${({ $tile }) => ($tile ? '6px' : '38px')};
   transform: ${({ $tile }) => ($tile ? 'none' : 'translateY(-50%)')};
 `;
@@ -1428,8 +1374,7 @@ const TranscriptInfoButton = styled.button`
 
 const TranscriptInfoCard = styled.div`
   position: absolute;
-  top: ${({ $tile }) => ($tile ? 'auto' : 'calc(100% + 6px)')};
-  bottom: ${({ $tile }) => ($tile ? 'calc(100% + 6px)' : 'auto')};
+  top: calc(100% + 6px);
   right: 0;
   z-index: 6;
   width: min(320px, calc(100vw - 32px));
@@ -1531,14 +1476,6 @@ const StatusDot = styled.span`
     width 0.15s ease,
     height 0.15s ease,
     box-shadow 0.15s ease;
-`;
-
-const TileStatus = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin-top: auto;
-  padding-right: 30px;
 `;
 
 const ToggleIcon = styled.span`

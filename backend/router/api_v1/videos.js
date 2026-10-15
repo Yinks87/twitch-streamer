@@ -215,16 +215,14 @@ videosRouter.get('/videos', async (req, res) => {
   const names = streamManager.listVideoFiles();
   // Probing is cached per file version; limit parallel ffprobe runs on a cold cache.
   const formatIssues = new Array(names.length).fill(null);
-  const durations = new Array(names.length).fill(null);
   let next = 0;
   await Promise.all(
     Array.from({ length: 4 }, async () => {
       while (next < names.length) {
         const index = next++;
-        const filepath = path.join(VIDEOS_DIR, names[index]);
-        formatIssues[index] =
-          await streamManager.getVideoFormatIssues(filepath);
-        durations[index] = await streamManager.getVideoDuration(filepath);
+        formatIssues[index] = await streamManager.getVideoFormatIssues(
+          path.join(VIDEOS_DIR, names[index]),
+        );
       }
     }),
   );
@@ -235,7 +233,6 @@ videosRouter.get('/videos', async (req, res) => {
       name,
       size: stat.size,
       modifiedAt: stat.mtime,
-      duration: durations[index],
       source: ['vod', 'clip'].includes(transcript?.source)
         ? transcript.source
         : 'upload',
