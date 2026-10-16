@@ -235,11 +235,6 @@ export async function getVideoFormatIssues(filepath) {
   return probe ? probe.formatIssues : null;
 }
 
-export async function getVideoDuration(filepath) {
-  const probe = await probeVideo(filepath);
-  return probe?.duration ?? null;
-}
-
 function pushLog(line) {
   logBuffer.push(line);
   if (logBuffer.length > MAX_LOG_LINES) logBuffer.shift();
