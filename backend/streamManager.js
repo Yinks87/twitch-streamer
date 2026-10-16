@@ -1,8 +1,6 @@
-// Scheduled restarts notify chat before ffmpeg stops; videoChanged remains the
-// only event that updates channel metadata for the next stream/video start.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFile, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import config from './config.js';
@@ -11,85 +9,24 @@ import {
   readTranscript,
   transcriptNeedsCategory,
   getSegmentAt,
+  parseTimestamp,
 } from './utils/transcript.js';
 import { getStreamLiveStatus } from './twitch/api.js';
-import { getFormatIssues, explainFormatIssues } from './utils/video-format.js';
+import TwitchStreamer from './twitch-streamer.js';
 
-const STALL_AFTER_MS = 10_000;
 const LIVE_CHECK_INTERVAL_MS = 15_000;
-const WATCHDOG_STALL_MS = 30_000;
-const MAX_LAG_SECS = 60;
-// Upper bound of repeated playlist entries in one ffmpeg run (see startStream).
-const MAX_PLAYLIST_ENTRIES = 100_000;
-// A run shorter than this counts as a failed attempt for the reconnect backoff.
-const MIN_HEALTHY_RUN_MS = 60_000;
-const MAX_RECONNECT_DELAY_SECS = 30;
-// ffmpeg is asked to stop gracefully first; if it hangs it is killed after this long.
-const KILL_ESCALATION_MS = 8_000;
-const MAX_PROBE_PARALLELISM = 6;
+const STALL_AFTER_MS = 10_000;
+// Twitch needs a moment after the first RTMP data before /streams reports the channel live.
+const LIVE_GRACE_MS = 60_000;
+const RELAUNCH_RETRY_SECS = 30;
+const OFFLINE_IGNORE_AFTER_SCHEDULED_RESTART_MS = 180_000;
 const SESSION_LOG_MAX_LINES = 30_000;
 const SESSION_LOG_KEEP_HEAD = 2_000;
 const MAX_LOG_FILES = 200;
-// Twitch needs a moment after the first RTMP data before /streams reports the channel live.
-const LIVE_GRACE_MS = 60_000;
-let lastProgressAt = 0;
-let liveCheckTimer = null;
-let twitchHealth = { live: null, reachable: null, checkedAt: null };
+const MAX_LOG_LINES = 200;
+const MAX_LOG_FILE_BYTES = 1_000_000;
+const PACKET_NOISE_RE = /\bpts[=:]\s*[-\d]|\bdts[=:]\s*[-\d]|\bpos[=:]\s*\d/;
 
-function stopLiveCheck() {
-  if (liveCheckTimer) clearInterval(liveCheckTimer);
-  liveCheckTimer = null;
-  twitchHealth = { live: null, reachable: null, checkedAt: null };
-}
-
-function startLiveCheck() {
-  stopLiveCheck();
-  const check = async () => {
-    // ffmpeg can hang (process alive, no output) when the looping playlist re-opens itself.
-    // Killing it triggers the exit handler's reconnect, which resumes the stream.
-    if (
-      ffmpegProcess &&
-      activeStreamConfig &&
-      Date.now() - lastProgressAt > WATCHDOG_STALL_MS
-    ) {
-      pushLog(
-        `No ffmpeg progress for ${WATCHDOG_STALL_MS / 1000}s; restarting ffmpeg.`,
-      );
-      lastProgressAt = Date.now();
-      ffmpegProcess.kill('SIGKILL');
-      return;
-    }
-    // ffmpeg running far behind real time (viewers only see buffering) never catches up
-    // by itself; restarting resumes at the current position with a clean pipeline.
-    const sinceStartSecs = startedAt
-      ? (Date.now() - Date.parse(startedAt)) / 1000
-      : 0;
-    if (
-      ffmpegProcess &&
-      activeStreamConfig &&
-      sinceStartSecs - lastOutputTimeSecs > MAX_LAG_SECS
-    ) {
-      pushLog(
-        `ffmpeg is ${Math.round(sinceStartSecs - lastOutputTimeSecs)}s behind real time; restarting ffmpeg.`,
-      );
-      ffmpegProcess.kill('SIGKILL');
-      return;
-    }
-    const result = await getStreamLiveStatus();
-    if (!liveCheckTimer) return;
-    twitchHealth = { ...result, checkedAt: new Date().toISOString() };
-  };
-  liveCheckTimer = setInterval(check, LIVE_CHECK_INTERVAL_MS);
-  check();
-}
-
-const FFMPEG_PATH = config.FFMPEG_PATH;
-// Twitch allows up to 8000 kbps / 60 fps; matches OBS's default "veryfast" x264 profile.
-// ffprobe lives next to ffmpeg
-const FFPROBE_PATH = FFMPEG_PATH.replace(
-  /ffmpeg(\.exe)?$/i,
-  (_, ext) => `ffprobe${ext ?? ''}`,
-);
 export const VIDEOS_DIR = config.VIDEOS_DIR;
 const LOGS_DIR = config.LOGS_DIR || path.join(process.cwd(), 'logs');
 const VIDEO_EXTENSIONS = new Set([
@@ -102,138 +39,36 @@ const VIDEO_EXTENSIONS = new Set([
   '.avi',
 ]);
 
-const MAX_LOG_LINES = 200;
-const MAX_LOG_FILE_BYTES = 1_000_000;
-
-// Emits 'videoChanged' with the filename whenever ffmpeg opens a new video file.
-// The initial event on reconnect also includes the saved in-video offset.
 export const streamEvents = new EventEmitter();
 
-let ffmpegProcess = null;
-let startedAt = null;
-let logBuffer = [];
-// Unrestricted, per-ffmpeg-process log lines, flushed to disk on exit.
-let sessionLogLines = [];
-let lastExit = null;
-// Stored while streaming so the exit handler can restart for looping.
-let activeStreamConfig = null;
-let resumeState = null;
-// RTMP timestamp base of the current session (seconds already streamed before it).
-let outputTsOffsetSecs = 0;
-let currentVideoFilename = '';
-let currentVideoStartSecs = 0;
-let currentVideoBaseOffset = 0;
-let lastOutputTimeSecs = 0;
-// Timers that fire videoChanged on each video transition.
-let videoChangeTimers = [];
-let reconnectTimer = null;
+const FFMPEG_PID_FILE = path.join(
+  path.resolve(config.VIDEOS_DIR),
+  '.ffmpeg.pid',
+);
+
+let streamer = null; // running TwitchStreamer engine
+let shutdownPromise = null; // engine that is still shutting down
+let activeStreamConfig = null; // options of the stream that should be running
+let startGeneration = 0; // bumped by start/stop to cancel pending launches
+let startingStream = false;
+let relaunchTimer = null;
 let scheduledRestartTimer = null;
 let scheduledRestartAt = null;
-let scheduledRestartRequested = false;
-let offlineRestartRequested = false;
 let lastScheduledRestartMs = 0;
-// Guards against two overlapping starts (double click, reconnect + manual start) that
-// would spawn two ffmpeg processes publishing to the same stream key.
-let startingStream = false;
-// Bumped by stopStream() so a start that is still probing files notices it was cancelled.
-let startGeneration = 0;
-// Consecutive failed/very short runs; drives the reconnect backoff.
-let consecutiveFailures = 0;
-// Playlist videos the last start left out (with the plain-language reasons).
+let scheduledRestartPending = false; // set until the relaunch after a scheduled restart succeeded
+let startedAt = null;
+let resumeState = null; // { filename, offset } to continue from after a restart
+let pendingResume = null; // resume point for the first track of the current launch
+let pendingJump = null; // { filename, timestampIndex } while a timestamp jump is being applied
+let currentVideoFilename = null;
 let skippedVideos = [];
+let titleByFilename = new Map();
+let liveCheckTimer = null;
+let twitchHealth = { live: null, reachable: null, checkedAt: null };
+const logBuffer = [];
+let sessionLogLines = [];
 
-function clearVideoChangeTimers() {
-  videoChangeTimers.forEach(clearTimeout);
-  videoChangeTimers = [];
-}
-
-function clearReconnectTimer() {
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-  reconnectTimer = null;
-}
-
-function clearScheduledRestartTimer() {
-  if (scheduledRestartTimer) clearTimeout(scheduledRestartTimer);
-  scheduledRestartTimer = null;
-  scheduledRestartAt = null;
-}
-
-// Progress-based transition state (driven by ffmpeg stdout, not wall-clock timers).
-let transitionTimes = []; // [{atSecs, filename}] relative times within one cycle
-let nextTransitionIdx = 0;
-let totalDuration = 0; // sum of all video durations in one cycle
-let cycleOffset = 0; // outTimeSecs at which the current cycle started
-let loopFirstFile = ''; // filename of entries[0] for cycle-restart events
-
-function resetTransitionState() {
-  transitionTimes = [];
-  nextTransitionIdx = 0;
-  totalDuration = 0;
-  cycleOffset = 0;
-  loopFirstFile = '';
-}
-
-// Uploaded/downloaded files are immutable (UUID names), so probe results can be cached
-// forever - this makes reconnects near-instant instead of re-probing the whole playlist.
-const probeCache = new Map();
-
-function probeVideo(filepath) {
-  // Trimming replaces a file in place, so the key includes mtime and size.
-  let cacheKey;
-  try {
-    const stat = fs.statSync(filepath);
-    cacheKey = `${filepath}|${stat.mtimeMs}|${stat.size}`;
-  } catch {
-    return Promise.resolve(null);
-  }
-  if (probeCache.has(cacheKey))
-    return Promise.resolve(probeCache.get(cacheKey));
-  return new Promise((resolve) => {
-    execFile(
-      FFPROBE_PATH,
-      [
-        '-v',
-        'error',
-        '-show_entries',
-        'stream=codec_type,codec_name,pix_fmt,time_base,sample_rate,channels,width,height',
-        '-show_entries',
-        'format=duration',
-        '-of',
-        'json',
-        filepath,
-      ],
-      (err, stdout) => {
-        if (err) {
-          resolve(null);
-          return;
-        }
-        try {
-          const data = JSON.parse(stdout);
-          const dur = parseFloat(data?.format?.duration);
-          const streams = data?.streams ?? [];
-          const stream = streams.find((s) => s.codec_type === 'video') ?? {};
-          const info = {
-            duration: Number.isFinite(dur) ? dur : null,
-            width: Number(stream.width) || null,
-            height: Number(stream.height) || null,
-            formatIssues: getFormatIssues(streams),
-          };
-          probeCache.set(cacheKey, info);
-          resolve(info);
-        } catch {
-          resolve(null);
-        }
-      },
-    );
-  });
-}
-
-// Format deviations of a video file (empty = fine), or null when it can't be probed.
-// Shares the probe cache with the stream start.
-export async function getVideoFormatIssues(filepath) {
-  const probe = await probeVideo(filepath);
-  return probe ? probe.formatIssues : null;
-}
+const isRunning = () => streamer !== null;
 
 function pushLog(line) {
   logBuffer.push(line);
@@ -250,7 +85,7 @@ function pushLog(line) {
   }
 }
 
-// Reconnect loops create one log file per ffmpeg run; keep only the newest ones.
+// Restarts create one log file per ffmpeg run; keep only the newest ones.
 function pruneLogFiles() {
   try {
     const files = fs
@@ -265,13 +100,16 @@ function pruneLogFiles() {
 }
 
 // Dumps the full ffmpeg log of the just-ended session to a timestamped .txt file.
-function writeSessionLogFile(code, signal) {
+function writeSessionLogFile(reason) {
   if (sessionLogLines.length === 0) return;
   try {
     fs.mkdirSync(LOGS_DIR, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filePath = path.join(LOGS_DIR, `stream-${stamp}.txt`);
-    const header = `ffmpeg exited (code=${code}, signal=${signal}) at ${new Date().toISOString()}\n\n`;
+    const now = new Date().toISOString();
+    const filePath = path.join(
+      LOGS_DIR,
+      `stream-${now.replace(/[:.]/g, '-')}.txt`,
+    );
+    const header = `ffmpeg stopped (${reason}) at ${now}\n\n`;
     fs.writeFileSync(filePath, header + sessionLogLines.join('\n') + '\n');
     pruneLogFiles();
   } catch (err) {
@@ -281,31 +119,20 @@ function writeSessionLogFile(code, signal) {
   }
 }
 
-// Asks ffmpeg to stop and escalates to a hard kill if it does not exit in time, so a hung
-// process can never block restarts ("a stream is already running") forever.
-function terminateFfmpeg() {
-  const proc = ffmpegProcess;
-  if (!proc) return;
+function writePidFile(pid) {
   try {
-    proc.kill('SIGINT');
+    fs.writeFileSync(FFMPEG_PID_FILE, String(pid));
   } catch {}
-  const timer = setTimeout(() => {
-    if (ffmpegProcess !== proc) return;
-    pushLog('ffmpeg did not exit in time; killing it.');
-    try {
-      proc.kill('SIGKILL');
-    } catch {}
-  }, KILL_ESCALATION_MS);
-  timer.unref?.();
+}
+
+function removePidFile() {
+  try {
+    fs.rmSync(FFMPEG_PID_FILE, { force: true });
+  } catch {}
 }
 
 // ffmpeg is a child of this server but keeps publishing if the server dies. Stop it on
 // shutdown, and remove a leftover one (hard crash, dev restart) when the server starts.
-const FFMPEG_PID_FILE = path.join(
-  path.resolve(config.VIDEOS_DIR),
-  '.ffmpeg.pid',
-);
-
 function killLeftoverFfmpeg() {
   let pid;
   try {
@@ -330,11 +157,9 @@ function killLeftoverFfmpeg() {
 
 function killFfmpegNow() {
   try {
-    ffmpegProcess?.kill('SIGKILL');
+    streamer?.forceKill();
   } catch {}
-  try {
-    fs.rmSync(FFMPEG_PID_FILE, { force: true });
-  } catch {}
+  removePidFile();
 }
 
 killLeftoverFfmpeg();
@@ -342,11 +167,590 @@ process.on('exit', killFfmpegNow);
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGUSR2']) {
   try {
     process.once(signal, () => {
-      activeStreamConfig = null;
       killFfmpegNow();
       process.kill(process.pid, signal); // continue with the default shutdown
     });
   } catch {}
+}
+
+function withoutEmptyValues(object) {
+  return Object.fromEntries(
+    Object.entries(object).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+  );
+}
+
+function ffprobePath() {
+  const match = /ffmpeg(\.exe)?$/i.exec(config.FFMPEG_PATH);
+  if (!match) return 'ffprobe';
+  return config.FFMPEG_PATH.slice(0, match.index) + `ffprobe${match[1] ?? ''}`;
+}
+
+function buildPlaylistEntries() {
+  const { playlistSource, shuffleMode } = db.getSettings();
+  const filter =
+    playlistSource === 'all'
+      ? null
+      : playlistSource === 'uploads_only'
+        ? 'upload'
+        : ['vod', 'clip'];
+  let entries = db
+    .getPlaylist(filter)
+    .filter(
+      (e) =>
+        e.enabled &&
+        e.status === 'ready' &&
+        !transcriptNeedsCategory(readTranscript(e.filename)),
+    );
+
+  if (entries.length === 0) {
+    throw new Error(
+      playlistSource === 'vods_only'
+        ? 'No imported VODs/clips in the playlist. Import one first.'
+        : playlistSource === 'uploads_only'
+          ? 'No uploaded videos in the playlist. Upload a file first.'
+          : 'Playlist is empty. Upload a video, import a VOD/clip, or complete a transcript missing its category first.',
+    );
+  }
+
+  if (shuffleMode) {
+    entries = [...entries];
+    for (let index = entries.length - 1; index > 0; index--) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      [entries[index], entries[randomIndex]] = [
+        entries[randomIndex],
+        entries[index],
+      ];
+    }
+  }
+
+  return entries;
+}
+
+// Videos whose file is gone are reported as skipped instead of stopping the stream.
+function splitPlayable(entries) {
+  titleByFilename = new Map(
+    entries.map((e) => [e.filename, e.title || e.filename]),
+  );
+  const playable = [];
+  const missing = [];
+  for (const entry of entries) {
+    const title = entry.title || entry.filename;
+    const filePath = path.resolve(VIDEOS_DIR, entry.filename);
+    if (fs.existsSync(filePath)) {
+      playable.push({ filename: entry.filename, title, filePath });
+    } else {
+      missing.push({ filename: entry.filename, title, reason: 'file missing' });
+    }
+  }
+  return { playable, missing };
+}
+
+function launchEngine(options, resumeFrom) {
+  const { playable, missing } = splitPlayable(buildPlaylistEntries());
+  skippedVideos = missing;
+  if (playable.length === 0) {
+    throw new Error(
+      'No playable video in the playlist: all of them are missing from the videos folder. Re-upload or re-import them.',
+    );
+  }
+
+  const resumeIndex = resumeFrom
+    ? playable.findIndex((entry) => entry.filename === resumeFrom.filename)
+    : -1;
+  const resumeOffset =
+    resumeIndex >= 0 ? Math.max(0, Number(resumeFrom.offset) || 0) : 0;
+  pendingResume =
+    resumeIndex >= 0
+      ? { filename: resumeFrom.filename, startAt: resumeOffset }
+      : null;
+
+  const engineOptions = withoutEmptyValues({
+    ffmpegPath: config.FFMPEG_PATH,
+    ffprobePath: ffprobePath(),
+    ingestUrl: options.twitchServer,
+    streamKey: options.streamKey,
+    playlist: playable.map((entry) => entry.filePath),
+    loop: options.loop,
+    fps: options.streamFps,
+    preset: options.encoderPreset,
+    videoBitrateKbps: options.videoBitrateKbps,
+    audioBitrateKbps: options.audioBitrateKbps,
+    resumeAt:
+      resumeIndex >= 0
+        ? { index: resumeIndex, startAt: resumeOffset }
+        : null,
+  });
+
+  const engine = new TwitchStreamer(engineOptions);
+  streamer = engine;
+  bindEngineEvents(engine, options);
+  startedAt = new Date().toISOString();
+  pushLog(`Starting stream with ${playable.length} item(s)`);
+  if (missing.length > 0) {
+    pushLog(`Skipping ${missing.length} missing video(s).`);
+  }
+  try {
+    engine.start();
+  } catch (err) {
+    streamer = null;
+    throw err;
+  }
+  startLiveCheck();
+  armScheduledRestart(options);
+}
+
+function bindEngineEvents(engine, options) {
+  // Events from an engine that was already replaced or stopped are ignored.
+  const on = (event, handler) =>
+    engine.on(event, (...args) => {
+      if (streamer === engine) handler(...args);
+    });
+
+  on('connected', () => {
+    if (engine.pusher?.pid) writePidFile(engine.pusher.pid);
+    pushLog('Connected to the Twitch ingest.');
+  });
+  on('disconnected', () => pushLog('RTMP connection lost; reconnecting.'));
+  on('reconnecting', ({ attempt, delayMs }) =>
+    pushLog(
+      `Reconnecting to Twitch (attempt ${attempt}) in ${Math.round(delayMs / 1000)}s.`,
+    ),
+  );
+  on('placeholder-start', () => pushLog('No video data; placeholder shown.'));
+  on('placeholder-end', () => pushLog('Video data resumed; placeholder removed.'));
+  on('track-start', ({ file, startAt }) => {
+    const filename = path.basename(file);
+    // Continuing the same video mid-way (restart or pause/resume) keeps the Twitch
+    // metadata already set instead of announcing the video again.
+    const resumed =
+      pendingResume?.filename === filename ||
+      (startAt > 0 && currentVideoFilename === filename);
+    pendingResume = null;
+    const jumpTo =
+      pendingJump?.filename === filename ? pendingJump.timestampIndex : null;
+    pendingJump = null;
+    currentVideoFilename = filename;
+    resumeState = { filename, offset: startAt };
+    pushLog(
+      `Playing ${filename}${startAt > 0 ? ` from ${Math.round(startAt)}s` : ''}`,
+    );
+    streamEvents.emit('videoChanged', filename, {
+      resumed: resumed || jumpTo !== null,
+      offset: resumed || jumpTo !== null ? startAt : 0,
+      jumpTo,
+    });
+  });
+  on('track-end', ({ file, skipped, reason }) => {
+    const filename = path.basename(file);
+    pushLog(skipped ? `Skipped ${filename} (${reason})` : `Finished ${filename}`);
+  });
+  on('track-error', ({ file, error }) => {
+    const filename = path.basename(file);
+    pushLog(`Could not play ${filename}: ${error}`);
+    if (!skippedVideos.some((video) => video.filename === filename)) {
+      skippedVideos = [
+        ...skippedVideos,
+        {
+          filename,
+          title: titleByFilename.get(filename) || filename,
+          reason: error,
+        },
+      ];
+    }
+  });
+  on('dropped', ({ totalBytes }) =>
+    pushLog(
+      `Dropped ${(totalBytes / 1048576).toFixed(1)} MB of backlog to keep up with real time.`,
+    ),
+  );
+  on('warning', (message) => pushLog(`Warning: ${message}`));
+  on('log', ({ source, line }) => {
+    if (!PACKET_NOISE_RE.test(line)) pushLog(`[${source}] ${line}`);
+  });
+  on('playlist-empty', () => {
+    if (options.loop) return;
+    pushLog('Playlist finished; stopping the stream.');
+    endStream('playlist-finished');
+  });
+}
+
+// Ends the stream intentionally (user stop or finished playlist without loop).
+function endStream(reason) {
+  activeStreamConfig = null;
+  startGeneration++; // cancels a start or relaunch that is still pending
+  clearRelaunchTimer();
+  clearScheduledRestartTimer();
+  stopLiveCheck();
+  resumeState = null;
+  pendingResume = null;
+  pendingJump = null;
+  scheduledRestartPending = false;
+  currentVideoFilename = null;
+  startedAt = null;
+  streamEvents.emit('streamStopped');
+  return stopEngine(reason);
+}
+
+function stopEngine(reason) {
+  const engine = streamer;
+  if (!engine) return shutdownPromise ?? Promise.resolve();
+  streamer = null;
+  pushLog(`Stopping ffmpeg (${reason}).`);
+  const shutdown = (async () => {
+    try {
+      await engine.stop();
+    } catch (err) {
+      pushLog(`Stop failed: ${err.message}`);
+    }
+    engine.forceKill();
+    pushLog('ffmpeg stopped.');
+    writeSessionLogFile(reason);
+    removePidFile();
+  })().finally(() => {
+    if (shutdownPromise === shutdown) shutdownPromise = null;
+  });
+  shutdownPromise = shutdown;
+  return shutdown;
+}
+
+function currentResumePoint() {
+  const status = streamer?.getStatus();
+  if (!status?.currentFile) return resumeState;
+  return {
+    filename: path.basename(status.currentFile),
+    offset: Math.max(0, Number(status.position) || 0),
+  };
+}
+
+function restartStream(reason, delayMs) {
+  resumeState = currentResumePoint();
+  stopEngine(reason);
+  scheduleRelaunch(delayMs);
+}
+
+function clearRelaunchTimer() {
+  if (relaunchTimer) clearTimeout(relaunchTimer);
+  relaunchTimer = null;
+}
+
+function clearScheduledRestartTimer() {
+  if (scheduledRestartTimer) clearTimeout(scheduledRestartTimer);
+  scheduledRestartTimer = null;
+  scheduledRestartAt = null;
+}
+
+function scheduleRelaunch(delayMs) {
+  clearRelaunchTimer();
+  const generation = startGeneration;
+  relaunchTimer = setTimeout(() => {
+    relaunchTimer = null;
+    relaunch(generation);
+  }, delayMs);
+}
+
+async function relaunch(generation) {
+  await shutdownPromise;
+  if (generation !== startGeneration || !activeStreamConfig || streamer) return;
+  try {
+    launchEngine(activeStreamConfig, resumeState);
+    if (scheduledRestartPending) {
+      scheduledRestartPending = false;
+      streamEvents.emit('scheduledRestartCompleted');
+    }
+  } catch (err) {
+    pushLog(`Restart failed: ${err.message} Retrying in ${RELAUNCH_RETRY_SECS}s.`);
+    scheduleRelaunch(RELAUNCH_RETRY_SECS * 1000);
+  }
+}
+
+function armScheduledRestart(options) {
+  clearScheduledRestartTimer();
+  // 0 or a missing interval disables the scheduled restart.
+  if (!(options.restartIntervalSeconds > 0)) return;
+  scheduledRestartAt = new Date(
+    Date.now() + options.restartIntervalSeconds * 1000,
+  ).toISOString();
+  scheduledRestartTimer = setTimeout(() => {
+    scheduledRestartTimer = null;
+    scheduledRestartAt = null;
+    if (!streamer || activeStreamConfig !== options) return;
+    lastScheduledRestartMs = Date.now();
+    scheduledRestartPending = true;
+    pushLog(
+      'Scheduled restart reached; stopping ffmpeg at the current video position.',
+    );
+    streamEvents.emit('scheduledRestart', {
+      delaySeconds: options.restartDelaySeconds,
+    });
+    restartStream('scheduled-restart', options.restartDelaySeconds * 1000);
+  }, options.restartIntervalSeconds * 1000);
+}
+
+function stopLiveCheck() {
+  if (liveCheckTimer) clearInterval(liveCheckTimer);
+  liveCheckTimer = null;
+  twitchHealth = { live: null, reachable: null, checkedAt: null };
+}
+
+function startLiveCheck() {
+  stopLiveCheck();
+  const check = () =>
+    getStreamLiveStatus()
+      .then(({ live, reachable }) => {
+        if (!streamer) return;
+        twitchHealth = {
+          live,
+          reachable,
+          checkedAt: new Date().toISOString(),
+        };
+      })
+      .catch((err) => console.error('Twitch live check failed:', err.message));
+  check();
+  liveCheckTimer = setInterval(check, LIVE_CHECK_INTERVAL_MS);
+}
+
+function getCurrentSegment() {
+  if (!streamer || !currentVideoFilename) return null;
+  const position = streamer.getStatus().position;
+  if (position == null) return null;
+  const segment = getSegmentAt(readTranscript(currentVideoFilename), position);
+  return segment ? { ...segment, positionSecs: position } : null;
+}
+
+export function listVideoFiles() {
+  if (!fs.existsSync(VIDEOS_DIR)) return [];
+  return fs
+    .readdirSync(VIDEOS_DIR)
+    .filter((name) => VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase()))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export function getStatus() {
+  const running = isRunning();
+  const sinceStart = startedAt ? Date.now() - Date.parse(startedAt) : 0;
+  const lastWriteAt = running ? streamer.lastWriteAt : 0;
+  const stalled =
+    running &&
+    sinceStart > STALL_AFTER_MS &&
+    lastWriteAt > 0 &&
+    Date.now() - lastWriteAt > STALL_AFTER_MS;
+  // 'ok' | 'stalled' (ffmpeg not delivering) | 'offline' (Twitch reports channel not live)
+  // | 'unreachable' (Twitch API unreachable, e.g. internet outage) | 'connecting' | null
+  let health = null;
+  if (running) {
+    if (stalled) health = 'stalled';
+    else if (twitchHealth.reachable === false) health = 'unreachable';
+    else if (twitchHealth.live === false)
+      health = sinceStart > LIVE_GRACE_MS ? 'offline' : 'connecting';
+    else if (twitchHealth.live === true) health = 'ok';
+    else health = 'connecting';
+  }
+  return {
+    running,
+    reconnecting: !running && Boolean(relaunchTimer),
+    health,
+    twitchCheckedAt: twitchHealth.checkedAt,
+    startedAt,
+    paused: running ? Boolean(streamer.getStatus().paused) : false,
+    pid: streamer?.pusher?.pid ?? null,
+    scheduledRestartAt,
+    log: logBuffer.slice(-50),
+    videoCount: listVideoFiles().length,
+    currentVideo: running ? currentVideoFilename || null : null,
+    currentSegment: running ? getCurrentSegment() : null,
+    skippedVideos,
+  };
+}
+
+export function refreshActivePlaylist() {
+  if (!streamer) return false;
+  let entries;
+  try {
+    entries = buildPlaylistEntries();
+  } catch (err) {
+    pushLog(`Playlist change not applied: ${err.message}`);
+    return false;
+  }
+  const { playable, missing } = splitPlayable(entries);
+  if (playable.length === 0) {
+    pushLog('Playlist change not applied: no playable video.');
+    return false;
+  }
+
+  const current = streamer.getStatus();
+  const currentName = current.currentFile
+    ? path.basename(current.currentFile)
+    : null;
+  const currentIndex = playable.findIndex(
+    (entry) => entry.filename === currentName,
+  );
+  const startIndex =
+    currentIndex >= 0
+      ? currentIndex + 1
+      : Math.min(current.nextIndex, playable.length);
+
+  skippedVideos = missing;
+  streamer.setPlaylist(
+    playable.map((entry) => entry.filePath),
+    { startIndex },
+  );
+  // setPlaylist drops the saved position, which a paused stream needs to continue from.
+  if (current.paused && currentIndex >= 0 && current.position != null) {
+    streamer.seek(current.position);
+  }
+  pushLog(`Playlist updated: ${playable.length} item(s).`);
+  return true;
+}
+
+// Transport controls for the running stream. Each returns the fresh status; they
+// throw when no stream is running so the API can report a clear error.
+function requireRunningEngine() {
+  if (!isRunning()) throw new Error('Es läuft kein Stream.');
+  return streamer;
+}
+
+export function skipTrack() {
+  requireRunningEngine().skip();
+  return getStatus();
+}
+
+export function previousTrack() {
+  requireRunningEngine().previous();
+  return getStatus();
+}
+
+export function pauseStream() {
+  requireRunningEngine().pause();
+  return getStatus();
+}
+
+export function resumeStream() {
+  requireRunningEngine().resume();
+  return getStatus();
+}
+
+// True while `filename` is the video currently on air; used to protect it from deletion.
+export function isCurrentVideo(filename) {
+  return isRunning() && currentVideoFilename === filename;
+}
+
+// Jumps to the next transcript timestamp of the running video (the one after the
+// current playback position).
+export function nextTimestamp() {
+  const engine = requireRunningEngine();
+  const position = engine.getStatus().position;
+  if (!currentVideoFilename || position == null)
+    throw new Error('Es läuft gerade kein Video.');
+  const timestamps = readTranscript(currentVideoFilename)?.timestamps;
+  const next = (Array.isArray(timestamps) ? timestamps : [])
+    .map((ts, index) => ({ index, secs: parseTimestamp(ts?.time) }))
+    .filter((ts) => ts.secs > position + 1)
+    .sort((a, b) => a.secs - b.secs)[0];
+  if (!next) throw new Error('Kein weiterer Zeitstempel in diesem Video.');
+
+  pendingJump = {
+    filename: currentVideoFilename,
+    timestampIndex: next.index,
+  };
+  if (!engine.seek(next.secs)) {
+    pendingJump = null;
+    throw new Error('Sprung zum nächsten Zeitstempel nicht möglich.');
+  }
+  pushLog(`Jumping to the next timestamp at ${Math.round(next.secs)}s.`);
+  return getStatus();
+}
+
+export async function startStream(options) {
+  if (isRunning())
+    throw new Error(
+      'A stream is already running. Stop it before starting a new one.',
+    );
+  if (startingStream)
+    throw new Error('A stream start is already in progress.');
+  startingStream = true;
+  try {
+    return await startStreamUnlocked(options);
+  } finally {
+    startingStream = false;
+  }
+}
+
+async function startStreamUnlocked({
+  twitchServer,
+  streamKey,
+  loop = true,
+  videoBitrateKbps = 6000,
+  audioBitrateKbps = 128,
+  streamFps = 60,
+  encoderPreset = 'veryfast',
+  restartIntervalSeconds = 169200,
+  restartDelaySeconds = 5,
+  resumeFrom = null,
+}) {
+  if (!streamKey) throw new Error('No Twitch stream key configured.');
+  startGeneration++;
+  const generation = startGeneration;
+  clearRelaunchTimer();
+  clearScheduledRestartTimer();
+  await shutdownPromise;
+  if (generation !== startGeneration) return getStatus();
+  if (isRunning())
+    throw new Error(
+      'A stream is already running. Stop it before starting a new one.',
+    );
+
+  const config = {
+    twitchServer,
+    streamKey,
+    loop,
+    videoBitrateKbps,
+    audioBitrateKbps,
+    streamFps,
+    encoderPreset,
+    restartIntervalSeconds,
+    restartDelaySeconds,
+  };
+  resumeState = resumeFrom;
+  launchEngine(config, resumeFrom);
+  activeStreamConfig = config;
+  return getStatus();
+}
+
+export function stopStream() {
+  endStream('stopped');
+  return getStatus();
+}
+
+const OFFLINE_RESTART_DELAY_MS = 0;
+
+// Called on EventSub stream.offline. Restarts the stream at the last video position
+// unless the stop was intentional (frontend stop) or part of a scheduled restart.
+export function handleStreamOffline() {
+  if (!activeStreamConfig) return { restarted: false, reason: 'not-streaming' };
+  const ignoreMs =
+    OFFLINE_IGNORE_AFTER_SCHEDULED_RESTART_MS +
+    activeStreamConfig.restartDelaySeconds * 1000;
+  if (Date.now() - lastScheduledRestartMs < ignoreMs)
+    return { restarted: false, reason: 'scheduled-restart' };
+  if (relaunchTimer) return { restarted: false, reason: 'reconnect-pending' };
+  if (shutdownPromise) return { restarted: false, reason: 'restart-pending' };
+
+  if (isRunning()) {
+    pushLog(
+      'Twitch reported the stream offline; restarting ffmpeg at the current video position.',
+    );
+    restartStream('offline', OFFLINE_RESTART_DELAY_MS);
+    return { restarted: true };
+  }
+
+  // ffmpeg is gone and no relaunch is scheduled (e.g. the last relaunch failed).
+  pushLog('Twitch reported the stream offline; restarting from resume point.');
+  scheduleRelaunch(OFFLINE_RESTART_DELAY_MS);
+  return { restarted: true };
+}
+
+export function getLogFilePath(filename) {
+  return getLogFileInfo(filename)?.filePath ?? null;
 }
 
 function getLogFileInfo(filename) {
@@ -368,10 +772,6 @@ function getLogFileInfo(filename) {
   } catch {
     return null;
   }
-}
-
-export function getLogFilePath(filename) {
-  return getLogFileInfo(filename)?.filePath ?? null;
 }
 
 export function listLogFiles() {
@@ -413,818 +813,4 @@ export function deleteLogFile(filename) {
   } catch {
     return false;
   }
-}
-
-export function listVideoFiles() {
-  if (!fs.existsSync(VIDEOS_DIR)) return [];
-  return fs
-    .readdirSync(VIDEOS_DIR)
-    .filter((name) => VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase()))
-    .sort((a, b) => a.localeCompare(b));
-}
-
-// Builds the ffmpeg concat playlist string from the DB - no file written.
-function buildPlaylistContent() {
-  const { playlistSource, shuffleMode } = db.getSettings();
-  const filter =
-    playlistSource === 'all'
-      ? null
-      : playlistSource === 'uploads_only'
-        ? 'upload'
-        : ['vod', 'clip'];
-  let entries = db
-    .getPlaylist(filter)
-    .filter(
-      (e) =>
-        e.enabled &&
-        e.status === 'ready' &&
-        !transcriptNeedsCategory(readTranscript(e.filename)),
-    );
-
-  if (entries.length === 0) {
-    throw new Error(
-      playlistSource === 'vods_only'
-        ? 'No imported VODs/clips in the playlist. Import one first.'
-        : playlistSource === 'uploads_only'
-          ? 'No uploaded videos in the playlist. Upload a file first.'
-          : 'Playlist is empty. Upload a video, import a VOD/clip, or complete a transcript missing its category first.',
-    );
-  }
-
-  if (shuffleMode) {
-    entries = [...entries];
-    for (let index = entries.length - 1; index > 0; index--) {
-      const randomIndex = Math.floor(Math.random() * (index + 1));
-      [entries[index], entries[randomIndex]] = [
-        entries[randomIndex],
-        entries[index],
-      ];
-    }
-  }
-
-  // Playlist content is built after ffprobe to include duration lines.
-  return { entries };
-}
-
-function removeStalePlaylistFiles() {
-  if (!fs.existsSync(VIDEOS_DIR)) return;
-  for (const filename of fs.readdirSync(VIDEOS_DIR)) {
-    if (
-      !/^twitch-playlist-\d+(?:-loop)?\.txt(?:\.\d+\.\d+\.tmp)?$/.test(filename)
-    )
-      continue;
-    try {
-      fs.unlinkSync(path.join(VIDEOS_DIR, filename));
-    } catch {}
-  }
-}
-
-function writePlaylistFile(playlistPath, content) {
-  const temporaryPath = `${playlistPath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temporaryPath, content, 'utf8');
-  fs.renameSync(temporaryPath, playlistPath);
-}
-
-function setLoopPlaylistState(entries, durations, resumeOffset = 0) {
-  let cumulativeSeconds = 0;
-  transitionTimes = [];
-  for (let index = 0; index < entries.length; index++) {
-    const duration = durations[index];
-    if (duration == null) break;
-    if (index < entries.length - 1) {
-      transitionTimes.push({
-        atSecs: cumulativeSeconds + duration,
-        filename: entries[index + 1].filename,
-      });
-    }
-    cumulativeSeconds += duration;
-  }
-  totalDuration = cumulativeSeconds;
-  loopFirstFile = entries[0].filename;
-  nextTransitionIdx = 0;
-  while (
-    nextTransitionIdx < transitionTimes.length &&
-    transitionTimes[nextTransitionIdx].atSecs <= resumeOffset
-  ) {
-    nextTransitionIdx++;
-  }
-}
-
-// Playlist edits made while streaming apply at the next ffmpeg start (reconnect or
-// scheduled restart): one ffmpeg run reads a fixed playlist file, and restarting it just
-// to pick up a change would drop the Twitch connection. Always reports "not applied".
-export async function refreshActivePlaylist() {
-  return false;
-}
-function isRunning() {
-  return ffmpegProcess !== null;
-}
-
-// Checks every video of the playlist once (at application start), so the format status is
-// known before the first stream start: it fills the probe cache - the media library and the
-// stream start then answer from the cache - and lists the videos the stream would skip.
-export async function checkPlaylistFormats() {
-  const entries = db.getPlaylist().filter((entry) => entry.status === 'ready');
-  const probes = await mapLimit(entries, MAX_PROBE_PARALLELISM, ({ filename }) =>
-    probeVideo(path.resolve(VIDEOS_DIR, filename)),
-  );
-  const problems = [];
-  entries.forEach((entry, i) => {
-    const probe = probes[i];
-    const issues = !probe
-      ? ['file missing or unreadable']
-      : !(probe.duration > 0)
-        ? ['no duration']
-        : probe.formatIssues;
-    if (issues.length > 0)
-      problems.push({ title: entry.title || entry.filename, filename: entry.filename, issues });
-  });
-  console.log(
-    `[FORMAT-CHECK] ${entries.length} playlist video(s) checked, ${problems.length} not streamable.`,
-  );
-  for (const { title, filename, issues } of problems) {
-    console.log(`[FORMAT-CHECK]   "${title}" (${filename}): ${issues.join(', ')}`);
-  }
-  return problems;
-}
-
-// Position inside the current video is derived from the encoder progress, the same basis
-// that drives the Twitch channel updates. The transcript is read on every call so edits
-// made while streaming show up immediately.
-function getCurrentSegment() {
-  if (!currentVideoFilename) return null;
-  const position =
-    currentVideoBaseOffset +
-    Math.max(0, lastOutputTimeSecs - currentVideoStartSecs);
-  const segment = getSegmentAt(readTranscript(currentVideoFilename), position);
-  return segment ? { ...segment, positionSecs: position } : null;
-}
-
-export function getStatus() {
-  const running = isRunning();
-  const sinceStart = startedAt ? Date.now() - Date.parse(startedAt) : 0;
-  const stalled =
-    running &&
-    sinceStart > STALL_AFTER_MS &&
-    Date.now() - lastProgressAt > STALL_AFTER_MS;
-  // 'ok' | 'stalled' (ffmpeg not delivering) | 'offline' (Twitch reports channel not live)
-  // | 'unreachable' (Twitch API unreachable, e.g. internet outage) | 'connecting' | null
-  let health = null;
-  if (running) {
-    if (stalled) health = 'stalled';
-    else if (twitchHealth.reachable === false) health = 'unreachable';
-    else if (twitchHealth.live === false)
-      health = sinceStart > LIVE_GRACE_MS ? 'offline' : 'connecting';
-    else if (twitchHealth.live === true) health = 'ok';
-    else health = 'connecting';
-  }
-  return {
-    running,
-    reconnecting: !running && Boolean(reconnectTimer),
-    health,
-    twitchCheckedAt: twitchHealth.checkedAt,
-    startedAt,
-    pid: ffmpegProcess ? ffmpegProcess.pid : null,
-    lastExit,
-    scheduledRestartAt,
-    log: logBuffer.slice(-50),
-    videoCount: listVideoFiles().length,
-    currentVideo: isRunning() ? currentVideoFilename || null : null,
-    currentSegment: isRunning() ? getCurrentSegment() : null,
-    skippedVideos: isRunning() ? skippedVideos : [],
-  };
-}
-
-const PACKET_NOISE_RE = /\bpts[=:]\s*[-\d]|\bdts[=:]\s*[-\d]|\bpos[=:]\s*\d/;
-
-// Runs `fn` over `items` with at most `limit` calls in flight (keeps result order).
-async function mapLimit(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        const index = next++;
-        results[index] = await fn(items[index], index);
-      }
-    }),
-  );
-  return results;
-}
-
-export async function startStream(options) {
-  if (isRunning())
-    throw new Error(
-      'A stream is already running. Stop it before starting a new one.',
-    );
-  if (startingStream)
-    throw new Error('A stream start is already in progress.');
-  startingStream = true;
-  try {
-    return await startStreamUnlocked(options, startGeneration);
-  } finally {
-    startingStream = false;
-  }
-}
-
-async function startStreamUnlocked(
-  {
-    twitchServer,
-    streamKey,
-    loop = true,
-    videoBitrateKbps = 6000,
-    audioBitrateKbps = 128,
-    streamFps = 60,
-    encoderPreset = 'veryfast',
-    restartIntervalSeconds = 169200,
-    restartDelaySeconds = 5,
-    resumeFrom = null,
-  },
-  generation,
-) {
-  if (!streamKey) throw new Error('No Twitch stream key configured.');
-  const keyframeIntervalFrames = streamFps * 2;
-  clearReconnectTimer();
-  clearScheduledRestartTimer();
-  scheduledRestartRequested = false;
-  offlineRestartRequested = false;
-  if (!resumeFrom) consecutiveFailures = 0;
-  removeStalePlaylistFiles();
-
-  const { entries: allEntries } = buildPlaylistContent();
-  // Only videos ffmpeg can actually play in sequence go into the run: a missing or
-  // unreadable file would make ffmpeg exit again and again, and a video that is not in the
-  // common streaming format (see utils/video-format.js) gets wrong timestamps from the
-  // concat demuxer. Those are left out on purpose; the media library marks the latter.
-  // Checked on every start because files may be added, replaced or deleted at any time.
-  const allProbes = await mapLimit(
-    allEntries,
-    MAX_PROBE_PARALLELISM,
-    ({ filename }) => probeVideo(path.resolve(VIDEOS_DIR, filename)),
-  );
-  const skippedEntries = [];
-  const playlistEntries = [];
-  allEntries.forEach((entry, i) => {
-    const probe = allProbes[i];
-    const issues = !probe
-      ? ['file missing or unreadable']
-      : !(probe.duration > 0)
-        ? ['no duration']
-        : probe.formatIssues;
-    if (issues.length > 0) skippedEntries.push({ entry, issues });
-    else playlistEntries.push(entry);
-  });
-  if (playlistEntries.length === 0)
-    throw new Error(
-      'No playable video in the playlist: all of them are missing or not in the streaming format. Re-upload or re-import the videos marked in the media library.',
-    );
-  // stopStream() may have been called while the files were being probed.
-  if (generation !== startGeneration) return getStatus();
-  const resumeIndex = resumeFrom
-    ? playlistEntries.findIndex(
-        (entry) => entry.filename === resumeFrom.filename,
-      )
-    : -1;
-  const entries =
-    resumeIndex >= 0
-      ? [
-          ...playlistEntries.slice(resumeIndex),
-          ...playlistEntries.slice(0, resumeIndex),
-        ]
-      : playlistEntries;
-  let resumeOffset =
-    resumeIndex >= 0 ? Math.max(0, Number(resumeFrom.offset) || 0) : 0;
-  // OBS keeps output timestamps monotonic across RTMP reconnects, so Twitch treats the new
-  // connection as a continuation of the same broadcast instead of a fresh video signal that
-  // resets the playtime. Mirror that by offsetting all mux timestamps by the total time
-  // already streamed (progress out_time stays session-relative, verified with ffmpeg 8).
-  const outputTsOffset = resumeFrom
-    ? Math.max(0, Number(resumeFrom.outputOffsetSecs) || 0)
-    : 0;
-  outputTsOffsetSecs = outputTsOffset;
-  const target = `${twitchServer.replace(/\/+$/, '')}/${streamKey}`;
-
-  const nextStreamConfig = {
-    twitchServer,
-    streamKey,
-    loop,
-    videoBitrateKbps,
-    audioBitrateKbps,
-    streamFps,
-    encoderPreset,
-    restartIntervalSeconds,
-    restartDelaySeconds,
-  };
-
-  // Durations/resolutions (already probed above, cached) so the concat playlist can include
-  // explicit duration lines (prevents non-monotonic DTS at file boundaries) and for
-  // transition tracking.
-  const probeByFilename = new Map(
-    allEntries.map(({ filename }, i) => [filename, allProbes[i]]),
-  );
-  const probes = entries.map(({ filename }) => probeByFilename.get(filename));
-  const durations = probes.map((p) => p.duration);
-
-  // Never resume past the end of the file (stale offsets would create an empty segment).
-  if (resumeOffset > 0 && durations[0] != null) {
-    resumeOffset = Math.min(resumeOffset, Math.max(durations[0] - 0.5, 0));
-  }
-
-  // OBS-style fixed canvas: pick the largest source resolution, capped at Twitch's 1080p
-  // guideline, and normalize every video to it so the encoder never reconfigures mid-stream
-  // (a mid-stream resolution change makes Twitch drop the ingest connection).
-  let canvasW = 1920;
-  let canvasH = 1080;
-  const withDims = probes.filter((p) => p?.width && p?.height);
-  if (withDims.length > 0) {
-    const largest = withDims.reduce((a, b) =>
-      b.width * b.height > a.width * a.height ? b : a,
-    );
-    const fit = Math.min(1920 / largest.width, 1080 / largest.height, 1);
-    canvasW = Math.max(2, Math.round((largest.width * fit) / 2) * 2);
-    canvasH = Math.max(2, Math.round((largest.height * fit) / 2) * 2);
-  }
-
-  // The playlists live inside VIDEOS_DIR and reference bare filenames: the concat demuxer
-  // resolves relative paths against the script location, and relative paths count as "safe".
-  const playlistDir = path.resolve(VIDEOS_DIR);
-  const stamp = Date.now();
-  const escapeName = (name) => name.replace(/'/g, "'\\''");
-  // ffconcat v1.0 with per-file duration lines lets the demuxer calculate exact timestamp offsets.
-  const entryLines = (inpoint) =>
-    entries
-      .map(({ filename }, i) => {
-        const dur = durations[i];
-        const ip = i === 0 ? inpoint : 0;
-        let s = `file '${escapeName(filename)}'`;
-        if (ip > 0) s += `\ninpoint ${ip}`;
-        if (dur != null) s += `\nduration ${Math.max(dur - ip, 0)}`;
-        return s;
-      })
-      .join('\n');
-
-  // Looping happens inside a single ffmpeg run: the playlist repeats the entries enough
-  // times to outlast the next scheduled restart. Restarting ffmpeg at every loop would
-  // cleanly close the RTMP connection, so Twitch would show the stream offline/online and
-  // reset the stream timer. (A self-referencing playlist made the timestamps explode.)
-  // Resume uses `inpoint` on the first (rotated) entry, a fast in-file mp4 seek.
-  const playlistFilename = `twitch-playlist-${stamp}.txt`;
-  const playlistPath = path.join(playlistDir, playlistFilename);
-  const playlistPaths = [playlistPath];
-  const cycleSecs = durations.reduce((sum, d) => sum + (d ?? 0), 0);
-  const coverageSecs =
-    restartIntervalSeconds > 0 ? restartIntervalSeconds * 1.1 : 7 * 86400;
-  const repeats = loop
-    ? Math.max(
-        1,
-        Math.min(
-          Math.ceil(coverageSecs / Math.max(cycleSecs, 1)),
-          Math.floor(MAX_PLAYLIST_ENTRIES / entries.length),
-        ),
-      )
-    : 1;
-  const content = `ffconcat version 1.0\n${[
-    entryLines(resumeOffset),
-    ...Array.from({ length: repeats - 1 }, () => entryLines(0)),
-  ].join('\n')}\n`;
-  writePlaylistFile(playlistPath, content);
-  // Playback time of this run's playlist (the resumed first file is shortened).
-  const runDurationSecs = cycleSecs * repeats - resumeOffset;
-
-  const baseArgs = [
-    '-loglevel',
-    'warning',
-    // Regenerate broken/missing timestamps from source files before they hit our own filters.
-    '-fflags',
-    '+genpts',
-    '-re',
-    '-thread_queue_size',
-    '1024',
-    '-progress',
-    'pipe:1',
-    '-protocol_whitelist',
-    'file,pipe,crypto,data',
-    '-f',
-    'concat',
-    '-safe',
-    '0',
-    '-i',
-    playlistPath,
-  ];
-
-  // OBS paces frames from a fixed frame counter (frame_time = N / fps) rather than trusting
-  // source timestamps. `scale`+`pad`+`setsar` normalize every source to the fixed canvas,
-  // `fps` normalizes to the configured FPS, `setpts`/`asetpts` rebuild presentation timestamps
-  // purely from the output sample count, and `format` pins the pixel format - this guarantees a
-  // perfectly monotonic, evenly spaced, constant-parameter stream regardless of how the
-  // concatenated source files were encoded (mixed resolution/fps/pix_fmt/timestamps no longer
-  // reach the encoder or Twitch).
-  const filterArgs = [
-    '-map',
-    '0:v:0',
-    '-map',
-    '0:a:0?',
-    '-vf',
-    `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease,` +
-      `pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2,setsar=1,` +
-      `fps=${streamFps},setpts=N/(${streamFps}*TB),format=yuv420p`,
-    '-af',
-    'aresample=async=1:first_pts=0,asetpts=N/SR/TB',
-  ];
-
-  const encoderArgs = [
-    '-c:v',
-    'libx264',
-    '-preset',
-    encoderPreset,
-    '-profile:v',
-    'high',
-    '-level:v',
-    '4.2',
-    '-pix_fmt',
-    'yuv420p',
-    // Fixed GOP in frames (not wall-clock expressions) so keyframes land at an exact,
-    // unchanging interval regardless of source irregularities.
-    '-g',
-    String(keyframeIntervalFrames),
-    '-keyint_min',
-    String(keyframeIntervalFrames),
-    '-sc_threshold',
-    '0',
-    '-bf',
-    '2',
-    '-b:v',
-    `${videoBitrateKbps}k`,
-    '-minrate',
-    `${videoBitrateKbps}k`,
-    '-maxrate',
-    `${videoBitrateKbps}k`,
-    '-bufsize',
-    `${videoBitrateKbps}k`,
-    '-x264-params',
-    'nal-hrd=cbr:force-cfr=1',
-    '-c:a',
-    'aac',
-    '-b:a',
-    `${audioBitrateKbps}k`,
-    '-ar',
-    '48000',
-    '-ac',
-    '2',
-  ];
-
-  const muxArgs = [
-    '-map_metadata',
-    '-1',
-    '-flvflags',
-    'no_duration_filesize',
-    '-flush_packets',
-    '1',
-    '-muxdelay',
-    '0',
-    '-muxpreload',
-    '0',
-    '-max_muxing_queue_size',
-    '1024',
-    ...(outputTsOffset > 0
-      ? ['-output_ts_offset', outputTsOffset.toFixed(3)]
-      : []),
-    // Fail a stalled RTMP connection within 15s instead of hanging, so the automatic
-    // reconnect lands well inside Twitch's ~90s disconnect protection window and the
-    // channel never goes offline.
-    '-rw_timeout',
-    '15000000',
-  ];
-
-  const args = [
-    ...baseArgs,
-    ...filterArgs,
-    ...encoderArgs,
-    ...muxArgs,
-    '-f',
-    'flv',
-    target,
-  ];
-
-  logBuffer = [];
-  sessionLogLines = [];
-  skippedVideos = skippedEntries.map(({ entry, issues }) => ({
-    filename: entry.filename,
-    title: entry.title || entry.filename,
-    ...explainFormatIssues(issues),
-  }));
-  pushLog(`Starting stream with ${entries.length} item(s)`);
-  for (const { entry, issues } of skippedEntries) {
-    pushLog(
-      `Skipped "${entry.title || entry.filename}" (${entry.filename}): ${issues.join(', ')}.`,
-    );
-  }
-
-  // stdin not needed: input comes from the playlist file. cwd doubles as a fallback for
-  // resolving the playlist's relative entries.
-  try {
-    ffmpegProcess = spawn(FFMPEG_PATH, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: path.resolve(VIDEOS_DIR),
-    });
-  } catch (err) {
-    fs.rmSync(playlistPath, { force: true });
-    throw err;
-  }
-  const thisProcess = ffmpegProcess;
-  activeStreamConfig = nextStreamConfig;
-  try {
-    fs.writeFileSync(FFMPEG_PID_FILE, String(thisProcess.pid ?? ''));
-  } catch {}
-  startedAt = new Date().toISOString();
-  lastExit = null;
-  lastProgressAt = Date.now();
-  startLiveCheck();
-
-  if (restartIntervalSeconds > 0) {
-    scheduledRestartAt = new Date(
-      Date.now() + restartIntervalSeconds * 1000,
-    ).toISOString();
-    scheduledRestartTimer = setTimeout(() => {
-      scheduledRestartTimer = null;
-      scheduledRestartAt = null;
-      if (!ffmpegProcess || !activeStreamConfig) return;
-      scheduledRestartRequested = true;
-      streamEvents.emit('scheduledRestart', {
-        delaySeconds: activeStreamConfig.restartDelaySeconds,
-      });
-      pushLog(
-        'Scheduled restart reached; stopping ffmpeg at the current video position.',
-      );
-      terminateFfmpeg();
-    }, restartIntervalSeconds * 1000);
-  }
-
-  // Populate transition state from the probed durations.
-  resetTransitionState();
-  loopFirstFile = entries[0].filename;
-  currentVideoFilename = entries[0].filename;
-  currentVideoStartSecs = 0;
-  currentVideoBaseOffset = resumeOffset;
-  lastOutputTimeSecs = 0;
-  {
-    setLoopPlaylistState(entries, durations, resumeOffset);
-    // The resumed portion counts as already-elapsed cycle time, so the shortened first
-    // cycle and all full later cycles share one set of transition times.
-    cycleOffset = -resumeOffset;
-  }
-
-  // "resumed" keeps the metadata already active on Twitch; it only applies when the video
-  // that was playing is still in the playlist and playback continues inside it.
-  streamEvents.emit('videoChanged', entries[0].filename, {
-    resumed: resumeIndex >= 0,
-    offset: resumeOffset,
-  });
-
-  let stdoutBuf = '';
-  ffmpegProcess.stdout.on('data', (chunk) => {
-    stdoutBuf += chunk.toString();
-    const lines = stdoutBuf.split('\n');
-    stdoutBuf = lines.pop() ?? '';
-    for (const line of lines) {
-      const m = line.match(/^out_time=(\d+):(\d+):([\d.]+)$/);
-      if (!m) continue;
-      const outTimeSecs =
-        parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
-      if (outTimeSecs > lastOutputTimeSecs) lastProgressAt = Date.now();
-      lastOutputTimeSecs = Math.max(lastOutputTimeSecs, outTimeSecs);
-      // Detect when we've crossed into the next repetition of the playlist.
-      if (loop && totalDuration > 0) {
-        while (outTimeSecs >= cycleOffset + totalDuration) {
-          cycleOffset += totalDuration;
-          nextTransitionIdx = 0;
-          if (activeStreamConfig) {
-            currentVideoBaseOffset = 0;
-            currentVideoStartSecs = cycleOffset;
-            currentVideoFilename = loopFirstFile;
-            streamEvents.emit('videoChanged', loopFirstFile);
-          }
-        }
-      }
-      const timeInCycle = outTimeSecs - cycleOffset;
-      while (
-        nextTransitionIdx < transitionTimes.length &&
-        timeInCycle >= transitionTimes[nextTransitionIdx].atSecs
-      ) {
-        if (activeStreamConfig) {
-          currentVideoFilename = transitionTimes[nextTransitionIdx].filename;
-          currentVideoStartSecs =
-            cycleOffset + transitionTimes[nextTransitionIdx].atSecs;
-          currentVideoBaseOffset = 0;
-          streamEvents.emit(
-            'videoChanged',
-            transitionTimes[nextTransitionIdx].filename,
-          );
-        }
-        nextTransitionIdx++;
-      }
-    }
-  });
-
-  ffmpegProcess.stderr.on('data', (chunk) => {
-    for (const line of chunk.toString().split('\n').filter(Boolean)) {
-      if (!PACKET_NOISE_RE.test(line)) {
-        pushLog(
-          streamKey
-            ? line.split(streamKey).join('[REDACTED_STREAM_KEY]')
-            : line,
-        );
-      }
-    }
-  });
-
-  thisProcess.on('exit', (code, signal) => {
-    const restartConfig = activeStreamConfig;
-    const ranMs = startedAt ? Date.now() - Date.parse(startedAt) : 0;
-    // Release the process slot first so nothing below can leave the manager "running".
-    ffmpegProcess = null;
-    startedAt = null;
-    try {
-      fs.rmSync(FFMPEG_PID_FILE, { force: true });
-    } catch {}
-    stopLiveCheck();
-    const isScheduledRestart = scheduledRestartRequested;
-    const isOfflineRestart = offlineRestartRequested;
-    scheduledRestartRequested = false;
-    offlineRestartRequested = false;
-    if (isScheduledRestart) lastScheduledRestartMs = Date.now();
-    clearScheduledRestartTimer();
-    // A clean exit only counts as "playlist played to the end" if the encoder actually got
-    // (almost) through the whole playlist; Windows reports code 0 for some killed processes.
-    const playlistFinished =
-      code === 0 &&
-      !signal &&
-      !isScheduledRestart &&
-      !isOfflineRestart &&
-      lastOutputTimeSecs >= runDurationSecs - 15;
-    // Runs that die quickly (bad key, no network, unreadable files) back off instead of
-    // hammering Twitch and the disk; a healthy run resets the counter.
-    if (ranMs >= MIN_HEALTHY_RUN_MS) consecutiveFailures = 0;
-    else if (!isScheduledRestart) consecutiveFailures++;
-    if (restartConfig && playlistFinished) {
-      if (!restartConfig.loop) {
-        activeStreamConfig = null;
-        resumeState = null;
-        streamEvents.emit('streamStopped');
-      } else {
-        // Whole playlist played: start the next cycle from the first entry while keeping
-        // the output timestamps continuous so Twitch sees one uninterrupted broadcast.
-        resumeState = {
-          filename: null,
-          offset: 0,
-          outputOffsetSecs: outputTsOffsetSecs + lastOutputTimeSecs,
-        };
-      }
-    } else if (restartConfig && currentVideoFilename) {
-      resumeState = {
-        filename: currentVideoFilename,
-        offset:
-          currentVideoBaseOffset +
-          Math.max(0, lastOutputTimeSecs - currentVideoStartSecs),
-        // Scheduled restarts must look like a brand-new broadcast (Twitch's 48h cap), so
-        // only unexpected drops carry the timestamp continuation. After Twitch reported the
-        // stream offline the broadcast is over, so the restart starts a fresh one as well.
-        outputOffsetSecs:
-          isScheduledRestart || isOfflineRestart
-            ? 0
-            : outputTsOffsetSecs + lastOutputTimeSecs,
-      };
-    }
-    clearVideoChangeTimers();
-    resetTransitionState();
-    for (const p of playlistPaths) {
-      try {
-        fs.unlinkSync(p);
-      } catch {}
-    }
-    lastExit = { code, signal, at: new Date().toISOString() };
-    pushLog(`ffmpeg exited (code=${code}, signal=${signal})`);
-    if (resumeState?.filename) {
-      pushLog(
-        `Saving resume point: ${resumeState.filename} at ${resumeState.offset.toFixed(2)}s`,
-      );
-    }
-    writeSessionLogFile(code, signal);
-    if (!restartConfig || !activeStreamConfig) return;
-
-    const reconnectDelaySeconds = isScheduledRestart
-      ? restartConfig.restartDelaySeconds
-      : playlistFinished && consecutiveFailures === 0
-        ? 0
-        : reconnectBackoffSeconds();
-    pushLog(
-      isScheduledRestart
-        ? `Scheduled restart; resuming in ${reconnectDelaySeconds} seconds.`
-        : playlistFinished && consecutiveFailures === 0
-          ? 'Playlist finished; starting the next loop.'
-          : `RTMP connection ended; reconnecting in ${reconnectDelaySeconds} seconds.`,
-    );
-    scheduleReconnect(reconnectDelaySeconds);
-  });
-
-  thisProcess.on('error', (err) => {
-    pushLog(`ffmpeg error: ${err.message}`);
-    // Only a process that never started is final; otherwise 'exit' follows and reconnects.
-    if (thisProcess.pid !== undefined) return;
-    stopLiveCheck();
-    clearScheduledRestartTimer();
-    for (const p of playlistPaths) {
-      try {
-        fs.unlinkSync(p);
-      } catch {}
-    }
-    ffmpegProcess = null;
-    startedAt = null;
-    activeStreamConfig = null;
-    resumeState = null;
-    clearReconnectTimer();
-    pushLog('ffmpeg could not be started; check FFMPEG_PATH. Stream stopped.');
-    writeSessionLogFile(null, null);
-    streamEvents.emit('streamStopped');
-  });
-
-  return getStatus();
-}
-
-function reconnectBackoffSeconds() {
-  return Math.min(
-    MAX_RECONNECT_DELAY_SECS,
-    2 * 2 ** Math.max(0, consecutiveFailures - 1),
-  );
-}
-
-// Starts the stream again (from the saved resume point) after `delaySeconds`. A failed
-// attempt - e.g. a file that vanished or a transient error - is retried with backoff, so
-// the stream recovers by itself as soon as the cause is gone.
-function scheduleReconnect(delaySeconds) {
-  clearReconnectTimer();
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    const config = activeStreamConfig;
-    if (!config || isRunning()) return;
-    startStream({ ...config, resumeFrom: resumeState })
-      .then(() => {
-        resumeState = null;
-      })
-      .catch((err) => {
-        pushLog(`Reconnect failed: ${err.message}`);
-        consecutiveFailures++;
-        if (activeStreamConfig && !isRunning() && !reconnectTimer)
-          scheduleReconnect(reconnectBackoffSeconds());
-      });
-  }, delaySeconds * 1000);
-}
-
-export function stopStream() {
-  startGeneration++; // cancels a start that is still probing files
-  consecutiveFailures = 0;
-  clearVideoChangeTimers();
-  clearReconnectTimer();
-  clearScheduledRestartTimer();
-  scheduledRestartRequested = false;
-  offlineRestartRequested = false;
-  resetTransitionState();
-  activeStreamConfig = null; // prevent the exit handler from restarting
-  resumeState = null;
-  streamEvents.emit('streamStopped');
-  if (!isRunning()) return getStatus();
-  terminateFfmpeg();
-  return getStatus();
-}
-
-const OFFLINE_IGNORE_AFTER_SCHEDULED_RESTART_MS = 180_000;
-
-// Called on EventSub stream.offline. Restarts the stream at the last video position
-// unless the stop was intentional (frontend stop) or part of a scheduled restart.
-export function handleStreamOffline() {
-  if (!activeStreamConfig) return { restarted: false, reason: 'not-streaming' };
-  if (scheduledRestartRequested)
-    return { restarted: false, reason: 'scheduled-restart' };
-  const ignoreMs =
-    OFFLINE_IGNORE_AFTER_SCHEDULED_RESTART_MS +
-    activeStreamConfig.restartDelaySeconds * 1000;
-  if (Date.now() - lastScheduledRestartMs < ignoreMs)
-    return { restarted: false, reason: 'scheduled-restart' };
-  if (reconnectTimer) return { restarted: false, reason: 'reconnect-pending' };
-  if (offlineRestartRequested)
-    return { restarted: false, reason: 'restart-pending' };
-
-  if (isRunning()) {
-    pushLog(
-      'Twitch reported the stream offline; restarting ffmpeg at the current video position.',
-    );
-    offlineRestartRequested = true;
-    terminateFfmpeg();
-    return { restarted: true };
-  }
-
-  // ffmpeg is gone and no reconnect is scheduled (e.g. an earlier reconnect failed).
-  pushLog('Twitch reported the stream offline; restarting from resume point.');
-  scheduleReconnect(0);
-  return { restarted: true };
 }

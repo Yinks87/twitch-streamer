@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import styled from '@emotion/styled';
 import CollapsiblePanel from '../components/CollapsiblePanel';
 import Thumbnail from '../components/Thumbnail';
@@ -6,7 +7,6 @@ import TimestampEditor from '../components/TimestampEditor';
 import VideoTrimmer from '../components/VideoTrimmer';
 import { api } from '../api';
 import { useAlert } from '../context/AlertContext';
-import { useStatusContext } from '../context/StatusContext';
 import {
   defaultTimestamp,
   normalizeTranscript,
@@ -19,7 +19,6 @@ import {
   VideoGrid,
   VideoTile,
   TileMedia,
-  TileOverlay,
   TileBody,
   TileTitle,
   TileMeta,
@@ -30,6 +29,12 @@ import {
   VideoListSize,
   VideoListEmpty,
 } from '../components/VideoList';
+import {
+  SOURCE_LABELS,
+  StatusDot,
+  VideoInfo,
+  VideoInfoRow,
+} from '../components/VideoInfo';
 
 function formatVodDuration(dur) {
   // dur is like "1h2m3s" from Twitch API
@@ -207,10 +212,10 @@ function TrimProgressStatus({ trimProgress }) {
   return (
     <TrimStatus role="status">
       <TrimStatusText>
-        <span>{trimProgress.queued ? 'Schnitt wartet' : 'Wird geschnitten'}</span>
         <span>
-          {percent != null ? `${percent.toFixed(1)}%` : 'Wartet…'}
+          {trimProgress.queued ? 'Schnitt wartet' : 'Wird geschnitten'}
         </span>
+        <span>{percent != null ? `${percent.toFixed(1)}%` : 'Wartet…'}</span>
       </TrimStatusText>
       <TrimProgressTrack
         aria-label={
@@ -282,7 +287,86 @@ function RemoteItem({ grid, thumbUrl, title, meta, status, onImport }) {
   );
 }
 
-const SOURCE_LABELS = { upload: 'Upload', vod: 'VOD', clip: 'Clip' };
+// "?" button with the transcript details card. The card is rendered in a portal with
+// fixed positioning so the scrollable tile list cannot clip it.
+function TranscriptInfo({ floating, children }) {
+  const infoId = useId();
+  const [pos, setPos] = useState(null);
+  const buttonRef = useRef(null);
+  const cardRef = useRef(null);
+  const open = pos !== null;
+
+  const show = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(320, window.innerWidth - 32);
+    const left = Math.min(
+      Math.max(16, rect.right - width),
+      window.innerWidth - width - 16,
+    );
+    const maxHeight = Math.max(
+      160,
+      Math.min(360, window.innerHeight - rect.bottom - 16),
+    );
+    setPos({ top: rect.bottom, left, width, maxHeight });
+  }, []);
+  const hide = useCallback(() => setPos(null), []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onScroll = (event) => {
+      if (!cardRef.current?.contains(event.target)) hide();
+    };
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', hide);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', hide);
+    };
+  }, [open, hide]);
+
+  return (
+    <TranscriptInfoControl
+      $floating={floating}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={(event) => {
+        const next = event.relatedTarget;
+        if (
+          !event.currentTarget.contains(next) &&
+          !cardRef.current?.contains(next)
+        ) {
+          hide();
+        }
+      }}
+    >
+      <TranscriptInfoButton
+        ref={buttonRef}
+        type="button"
+        aria-label="Transkriptinformationen anzeigen"
+        aria-expanded={open}
+        aria-controls={`transcript-info-${infoId}`}
+        onClick={() => (open ? hide() : show())}
+      >
+        ?
+      </TranscriptInfoButton>
+      {open &&
+        createPortal(
+          <TranscriptInfoCard
+            ref={cardRef}
+            id={`transcript-info-${infoId}`}
+            role="region"
+            aria-label="Transkriptinformationen"
+            style={pos}
+          >
+            {children}
+          </TranscriptInfoCard>,
+          document.body,
+        )}
+    </TranscriptInfoControl>
+  );
+}
 
 // ── One uploaded video: collapsed row / expanded transcript editor ───────────
 function MediaLibraryItem({
@@ -296,8 +380,6 @@ function MediaLibraryItem({
   onTrimProgress,
 }) {
   const { showAlert } = useAlert();
-  const infoId = useId();
-  const [transcriptInfoOpen, setTranscriptInfoOpen] = useState(false);
   const storageKey = `twitch-streamer.mediathek.${video.name}`;
   const [expanded, setExpanded] = useState(
     () => window.localStorage.getItem(storageKey) === 'expanded',
@@ -321,51 +403,6 @@ function MediaLibraryItem({
   }`;
   const transcriptSignature = JSON.stringify(video.transcript || {});
   const needsCategory = videoNeedsCategory(video.transcript);
-  // Not in the streaming format: left out of the stream until re-uploaded/re-imported.
-  const badFormat = (video.formatIssues?.length ?? 0) > 0;
-  const { downloads } = useStatusContext();
-  const convertJobRunning = downloads.some(
-    (download) => download.filename === video.name,
-  );
-  const [convertRequested, setConvertRequested] = useState(false);
-  const sawConvertJob = useRef(false);
-
-  async function handleConvert() {
-    setConvertRequested(true);
-    sawConvertJob.current = false;
-    try {
-      await api.convertVideo(video.name);
-      // Fast conversions can finish between two polls of the running jobs.
-      setTimeout(() => {
-        if (!sawConvertJob.current) {
-          setConvertRequested(false);
-          onRefresh?.();
-        }
-      }, 4000);
-    } catch (err) {
-      setConvertRequested(false);
-      showAlert({ severity: 'error', message: err.message });
-    }
-  }
-
-  useEffect(() => {
-    if (convertJobRunning) {
-      sawConvertJob.current = true;
-    } else if (sawConvertJob.current) {
-      sawConvertJob.current = false;
-      setConvertRequested(false);
-      setReloadToken(Date.now());
-      onRefresh?.();
-    }
-  }, [convertJobRunning]);
-
-  const formatWarning = badFormat && (
-    <FormatWarning
-      title={`Wird nicht gestreamt. ${(video.formatReport?.problems ?? []).map((problem) => problem.reason).join(' ')} Zum Umwandeln das Video aufklappen.`}
-    >
-      Falsches Format – wird nicht gestreamt
-    </FormatWarning>
-  );
   const isActive = Boolean(
     playlistEntry?.enabled && !playlistEntry?.needsCategory,
   );
@@ -461,8 +498,7 @@ function MediaLibraryItem({
   const thumbSrc = `/api/v1/thumbnails/${encodeURIComponent(video.name)}${
     reloadToken ? `?t=${reloadToken}` : ''
   }`;
-  const handleTrimProgress = (progress) =>
-    onTrimProgress(video.name, progress);
+  const handleTrimProgress = (progress) => onTrimProgress(video.name, progress);
   const statusDot = (
     <StatusDot
       $active={isActive}
@@ -481,104 +517,83 @@ function MediaLibraryItem({
     />
   );
 
-  return (
-    <ItemRow
-      $tile={tile}
-      $wide={grid && expanded}
-      $infoOpen={!expanded && transcriptInfoOpen}
-    >
-      {!expanded && (
-        <TranscriptInfoControl
-          $tile={grid}
-          onMouseEnter={() => setTranscriptInfoOpen(true)}
-          onMouseLeave={() => setTranscriptInfoOpen(false)}
-          onFocus={() => setTranscriptInfoOpen(true)}
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) {
-              setTranscriptInfoOpen(false);
-            }
-          }}
-        >
-          <TranscriptInfoButton
-            type="button"
-            aria-label="Transkriptinformationen anzeigen"
-            aria-expanded={transcriptInfoOpen}
-            aria-controls={`transcript-info-${infoId}`}
-            onClick={() => setTranscriptInfoOpen((open) => !open)}
-          >
-            ?
-          </TranscriptInfoButton>
-          {transcriptInfoOpen && (
-            <TranscriptInfoCard
-              id={`transcript-info-${infoId}`}
-              role="region"
-              aria-label="Transkriptinformationen"
-            >
-              {transcriptTimestamps.length === 0 &&
-              mutedSegments.length === 0 ? (
-                <TranscriptInfoEmpty>
-                  Keine Transkriptinformationen vorhanden.
-                </TranscriptInfoEmpty>
-              ) : (
-                <>
-                  {transcriptTimestamps.length > 0 && (
-                    <TranscriptInfoSection>
-                      <TranscriptInfoHeading>Zeitstempel</TranscriptInfoHeading>
-                      {transcriptTimestamps.map((timestamp, index) => (
-                        <TranscriptInfoEntry
-                          key={`${timestamp.time || 'time'}-${index}`}
-                        >
-                          <TranscriptInfoTime>
-                            {timestamp.time || '00:00:00'}
-                          </TranscriptInfoTime>
-                          <div>
-                            <TranscriptInfoValue>
-                              Titel: {timestamp.title || 'Kein Titel'}
-                            </TranscriptInfoValue>
-                            <TranscriptInfoValue>
-                              Kategorie: {timestamp.category || 'Nicht gesetzt'}
-                            </TranscriptInfoValue>
-                            {timestamp.category_id != null && (
-                              <TranscriptInfoDetail>
-                                Twitch-Kategorie-ID: {timestamp.category_id}
-                              </TranscriptInfoDetail>
-                            )}
-                          </div>
-                        </TranscriptInfoEntry>
-                      ))}
-                    </TranscriptInfoSection>
-                  )}
-                  {mutedSegments.length > 0 && (
-                    <TranscriptInfoSection>
-                      <TranscriptInfoHeading>
-                        Stummgeschaltete Bereiche
-                      </TranscriptInfoHeading>
-                      {mutedSegments.map((segment, index) => (
-                        <TranscriptInfoEntry
-                          key={`${segment.offset}-${segment.duration}-${index}`}
-                        >
-                          <TranscriptInfoValue>
-                            {formatTranscriptTime(segment.offset)} –{' '}
-                            {formatTranscriptTime(
-                              Number(segment.offset) + Number(segment.duration),
-                            )}
-                          </TranscriptInfoValue>
-                          <TranscriptInfoDetail>
-                            Dauer: {formatTranscriptTime(segment.duration)}
-                          </TranscriptInfoDetail>
-                        </TranscriptInfoEntry>
-                      ))}
-                    </TranscriptInfoSection>
-                  )}
-                </>
-              )}
-            </TranscriptInfoCard>
+  const transcriptInfoContent = (
+    <>
+      {transcriptTimestamps.length === 0 && mutedSegments.length === 0 ? (
+        <TranscriptInfoEmpty>
+          Keine Transkriptinformationen vorhanden.
+        </TranscriptInfoEmpty>
+      ) : (
+        <>
+          {transcriptTimestamps.length > 0 && (
+            <TranscriptInfoSection>
+              <TranscriptInfoHeading>Zeitstempel</TranscriptInfoHeading>
+              {transcriptTimestamps.map((timestamp, index) => (
+                <TranscriptInfoEntry
+                  key={`${timestamp.time || 'time'}-${index}`}
+                >
+                  <TranscriptInfoTime>
+                    {timestamp.time || '00:00:00'}
+                  </TranscriptInfoTime>
+                  <div>
+                    <TranscriptInfoValue>
+                      Titel: {timestamp.title || 'Kein Titel'}
+                    </TranscriptInfoValue>
+                    <TranscriptInfoValue>
+                      Kategorie: {timestamp.category || 'Nicht gesetzt'}
+                    </TranscriptInfoValue>
+                    {timestamp.category_id != null && (
+                      <TranscriptInfoDetail>
+                        Twitch-Kategorie-ID: {timestamp.category_id}
+                      </TranscriptInfoDetail>
+                    )}
+                  </div>
+                </TranscriptInfoEntry>
+              ))}
+            </TranscriptInfoSection>
           )}
-        </TranscriptInfoControl>
+          {mutedSegments.length > 0 && (
+            <TranscriptInfoSection>
+              <TranscriptInfoHeading>
+                Stummgeschaltete Bereiche
+              </TranscriptInfoHeading>
+              {mutedSegments.map((segment, index) => (
+                <TranscriptInfoEntry
+                  key={`${segment.offset}-${segment.duration}-${index}`}
+                >
+                  <TranscriptInfoValue>
+                    {formatTranscriptTime(segment.offset)} –{' '}
+                    {formatTranscriptTime(
+                      Number(segment.offset) + Number(segment.duration),
+                    )}
+                  </TranscriptInfoValue>
+                  <TranscriptInfoDetail>
+                    Dauer: {formatTranscriptTime(segment.duration)}
+                  </TranscriptInfoDetail>
+                </TranscriptInfoEntry>
+              ))}
+            </TranscriptInfoSection>
+          )}
+        </>
       )}
+    </>
+  );
+
+  const addedAt = playlistEntry?.created_at ?? video.uploadedAt;
+  const transferredAt =
+    video.source === 'upload' ? null : playlistEntry?.twitch_created_at;
+  const transcriptInfo = !expanded && (
+    <TranscriptInfo floating={!tile}>{transcriptInfoContent}</TranscriptInfo>
+  );
+
+  return (
+    <ItemRow $tile={tile} $grid={grid} $wide={grid && expanded}>
+      {!tile && transcriptInfo}
       <ItemHeader
         type="button"
         $tile={tile}
+        title={tile ? displayTitle : undefined}
+        aria-label={tile ? displayTitle : undefined}
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
       >
@@ -586,16 +601,15 @@ function MediaLibraryItem({
           <>
             <TileMedia>
               <Thumbnail src={thumbSrc} alt="" fluid />
-              <TileOverlay>{statusDot}</TileOverlay>
             </TileMedia>
-            <TileBody>
-              <TileTitle title={displayTitle}>{displayTitle}</TileTitle>
-              {trimProgress && (
-                <TrimProgressStatus trimProgress={trimProgress} />
-              )}
-              {needsCategory && <Warning>Transkript unvollständig</Warning>}
-              {formatWarning}
-            </TileBody>
+            {(trimProgress || needsCategory) && (
+              <TileBody>
+                {trimProgress && (
+                  <TrimProgressStatus trimProgress={trimProgress} />
+                )}
+                {needsCategory && <Warning>Transkript unvollständig</Warning>}
+              </TileBody>
+            )}
           </>
         ) : (
           <>
@@ -604,11 +618,8 @@ function MediaLibraryItem({
             <VideoListName style={{ minWidth: 0 }}>
               {displayTitle}
             </VideoListName>
-            {trimProgress && (
-              <TrimProgressStatus trimProgress={trimProgress} />
-            )}
+            {trimProgress && <TrimProgressStatus trimProgress={trimProgress} />}
             {needsCategory && <Warning>Transkript unvollständig</Warning>}
-            {formatWarning}
 
             <ToggleIcon aria-hidden="true">
               <span
@@ -625,6 +636,19 @@ function MediaLibraryItem({
         )}
       </ItemHeader>
 
+      {tile && (
+        <VideoInfoRow>
+          <VideoInfo
+            active={isActive}
+            source={video.source}
+            duration={video.duration}
+            addedAt={addedAt}
+            transferredAt={transferredAt}
+          />
+          {transcriptInfo}
+        </VideoInfoRow>
+      )}
+
       {expanded && (
         <ItemBody>
           <ItemMeta>
@@ -638,46 +662,6 @@ function MediaLibraryItem({
                 : 'Nicht in der Playlist'}
             </span>
           </ItemMeta>
-          {badFormat && (
-            <FormatNotice role="alert">
-              <strong>Dieses Video wird nicht gestreamt</strong>
-              <p>
-                Es hat nicht das Format, das der Stream braucht, und wird beim
-                Start der Playlist deshalb übersprungen. Zusammengefügt würde
-                es sonst mit falschen Zeitstempeln laufen: Bild friert ein oder
-                der Ton verschiebt sich.
-              </p>
-              <ul>
-                {(video.formatReport?.problems ?? []).map((problem) => (
-                  <li key={problem.issue}>
-                    <span>{problem.reason}</span>
-                    {problem.fix && <em> → {problem.fix}</em>}
-                  </li>
-                ))}
-              </ul>
-              {video.formatReport?.conversion.mode === 'impossible' ? (
-                <p>Dieses Video lässt sich nicht umwandeln.</p>
-              ) : (
-                <>
-                  <p>
-                    {video.formatReport?.conversion.mode === 'reencode'
-                      ? 'Die Umwandlung encodiert das Bild neu und kann je nach Länge mehrere Minuten dauern. Das Original wird erst ersetzt, wenn das Ergebnis fertig ist.'
-                      : 'Die Umwandlung packt das Video nur um, ohne Qualitätsverlust und meist in wenigen Sekunden. Das Original wird erst ersetzt, wenn das Ergebnis fertig ist.'}
-                  </p>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={handleConvert}
-                    disabled={convertRequested || convertJobRunning}
-                  >
-                    {convertRequested || convertJobRunning
-                      ? 'Wird umgewandelt…'
-                      : 'In Streamformat umwandeln'}
-                  </Button>
-                </>
-              )}
-            </FormatNotice>
-          )}
           <Preview
             ref={videoRef}
             src={previewSrc}
@@ -1327,12 +1311,11 @@ const ItemRow = styled(VideoListItem)`
   display: block;
   padding: 0;
   position: relative;
-  z-index: ${({ $infoOpen }) => ($infoOpen ? 10 : 'auto')};
   /* Expanded rows must not clip the category autocomplete dropdown. */
   overflow: visible;
 
-  ${({ $tile }) =>
-    $tile &&
+  ${({ $grid }) =>
+    $grid &&
     `
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -1341,15 +1324,22 @@ const ItemRow = styled(VideoListItem)`
       border-bottom: 1px solid var(--border);
     }
   `}
+  /* Clip the thumbnail to the rounded tile corners. */
+  ${({ $tile }) => $tile && 'overflow: hidden;'}
   ${({ $wide }) => $wide && 'grid-column: 1 / -1;'}
 `;
 
 const TranscriptInfoControl = styled.div`
-  position: absolute;
-  z-index: 5;
-  top: ${({ $tile }) => ($tile ? '6px' : '50%')};
-  right: ${({ $tile }) => ($tile ? '6px' : '38px')};
-  transform: ${({ $tile }) => ($tile ? 'none' : 'translateY(-50%)')};
+  flex-shrink: 0;
+  ${({ $floating }) =>
+    $floating &&
+    `
+    position: absolute;
+    z-index: 5;
+    top: 50%;
+    right: 38px;
+    transform: translateY(-50%);
+  `}
 `;
 
 const TranscriptInfoButton = styled.button`
@@ -1373,12 +1363,8 @@ const TranscriptInfoButton = styled.button`
 `;
 
 const TranscriptInfoCard = styled.div`
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 6;
-  width: min(320px, calc(100vw - 32px));
-  max-height: min(360px, 60vh);
+  position: fixed;
+  z-index: 1000;
   overflow-y: auto;
   padding: 0.75rem;
   border: 1px solid var(--border);
@@ -1461,23 +1447,6 @@ const ItemHeader = styled.button`
   `}
 `;
 
-const StatusDot = styled.span`
-  width: ${({ $active }) => ($active ? '12px' : '10px')};
-  height: ${({ $active }) => ($active ? '12px' : '10px')};
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: ${({ $active }) =>
-    $active ? 'var(--color-success, #4caf50)' : '#666'};
-  box-shadow: ${({ $active }) =>
-    $active
-      ? '0 0 0 3px rgba(76,175,80,.24), 0 0 8px rgba(76,175,80,.35)'
-      : 'none'};
-  transition:
-    width 0.15s ease,
-    height 0.15s ease,
-    box-shadow 0.15s ease;
-`;
-
 const ToggleIcon = styled.span`
   margin-left: auto;
   color: var(--text-dim, #8d9198);
@@ -1511,47 +1480,6 @@ const ItemMeta = styled.div`
 const Warning = styled.span`
   font-size: 0.75rem;
   color: var(--color-warning, #e0a326);
-`;
-
-const FormatWarning = styled(Warning)`
-  color: var(--color-danger, #e5484d);
-`;
-
-const FormatNotice = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin: 0.5rem 0;
-  padding: 0.75rem 0.9rem;
-  border: 1px solid var(--color-danger, #e5484d);
-  border-radius: 6px;
-  font-size: 0.85rem;
-
-  strong {
-    color: var(--color-danger, #e5484d);
-  }
-
-  p,
-  ul {
-    margin: 0;
-  }
-
-  ul {
-    padding-left: 1.2rem;
-  }
-
-  li {
-    margin-bottom: 0.35rem;
-  }
-
-  em {
-    font-style: normal;
-    opacity: 0.8;
-  }
-
-  button {
-    align-self: flex-start;
-  }
 `;
 
 const TrimStatus = styled.div`

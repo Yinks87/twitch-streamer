@@ -45,7 +45,7 @@ const migrations = [
           broadcaster_type TEXT,
           managers         TEXT NOT NULL DEFAULT '[]',
           profile_image_url TEXT,
-          role             TEXT NOT NULL DEFAULT 'manager',
+          role             TEXT    NOT NULL DEFAULT 'manager',
           session_token    TEXT    UNIQUE,
           created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
           updated_at       TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -60,7 +60,8 @@ const migrations = [
           vod_id     TEXT,
           status     TEXT    NOT NULL DEFAULT 'ready',
           enabled    INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+          created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+          twitch_created_at TEXT DEFAULT ''
         );
       `);
     },

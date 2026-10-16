@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { useStatusContext } from '../context/StatusContext';
 import { useAlert } from '../context/AlertContext';
 import StreamHeroPanel from '../panels/StreamHeroPanel';
 import DownloadsPanelFile from '../panels/DownloadsPanel';
@@ -32,33 +31,9 @@ const VOD_STATUS_LABEL = {
 };
 
 const PRIVILEGED_ROLES = ['admin', 'broadcaster'];
-const PLAYLIST_CHANGE_NOTICE_KEY = 'twitch-streamer.playlist-change-pending';
-const STREAM_PLAYLIST_SIGNATURE_KEY =
-  'twitch-streamer.stream-playlist-signature';
-
-function getPlaylistSignature(playlist) {
-  return playlist.map((entry) => entry.id).join(',');
-}
 
 export default function Home() {
   return <PlayerPageContent />;
-}
-
-// Guarded destructive buttons — read stream status from context so the parent list doesn't
-// need to hold/re-render on it.
-function StopGuardButton({ onClick, children, title }) {
-  const { status } = useStatusContext();
-  return (
-    <Button
-      variant="ghost"
-      danger
-      onClick={onClick}
-      disabled={status.running}
-      title={status.running ? 'Stream läuft – zuerst stoppen' : title}
-    >
-      {children}
-    </Button>
-  );
 }
 
 // ── Active downloads panel — owns its own polling-derived data via context, so it
@@ -108,9 +83,6 @@ function PlayerPageContent() {
   const [clipDateTo, setClipDateTo] = useState('');
 
   const [playlist, setPlaylist] = useState([]);
-  const [playlistChangePending, setPlaylistChangePending] = useState(
-    () => window.localStorage.getItem(PLAYLIST_CHANGE_NOTICE_KEY) === 'true',
-  );
   const playlistRequestRef = useRef(0);
   const [draggedPlaylistId, setDraggedPlaylistId] = useState(null);
   const [dragOverPlaylistId, setDragOverPlaylistId] = useState(null);
@@ -147,33 +119,8 @@ function PlayerPageContent() {
     const requestId = ++playlistRequestRef.current;
     const data = await api.getPlaylist();
     if (requestId !== playlistRequestRef.current) return;
-    const signature = getPlaylistSignature(data.playlist);
-    let streamPlaylistSignature = window.localStorage.getItem(
-      STREAM_PLAYLIST_SIGNATURE_KEY,
-    );
-    if (streamPlaylistSignature === null) {
-      streamPlaylistSignature = signature;
-      window.localStorage.setItem(
-        STREAM_PLAYLIST_SIGNATURE_KEY,
-        streamPlaylistSignature,
-      );
-    }
-    const changePending = signature !== streamPlaylistSignature;
-    window.localStorage.setItem(
-      PLAYLIST_CHANGE_NOTICE_KEY,
-      String(changePending),
-    );
-    setPlaylistChangePending(changePending);
     setPlaylist(data.playlist);
   }, []);
-
-  function handleStreamStarted() {
-    playlistRequestRef.current += 1;
-    const signature = getPlaylistSignature(playlist);
-    window.localStorage.setItem(STREAM_PLAYLIST_SIGNATURE_KEY, signature);
-    window.localStorage.setItem(PLAYLIST_CHANGE_NOTICE_KEY, 'false');
-    setPlaylistChangePending(false);
-  }
 
   const loadVods = useCallback(
     async (after, silent = false) => {
@@ -453,21 +400,6 @@ function PlayerPageContent() {
   const readyPlaylist = playlist.filter(
     (e) => e.status === 'ready' && e.enabled && !e.needsCategory,
   );
-  // Enabled playlist videos that are not in the streaming format: the next stream start
-  // leaves them out.
-  const formatProblems = videos
-    .filter(
-      (video) =>
-        video.formatIssues?.length > 0 &&
-        playlist.some(
-          (e) => e.filename === video.name && e.status === 'ready' && e.enabled,
-        ),
-    )
-    .map((video) => ({
-      filename: video.name,
-      title: video.transcript?.timestamps?.[0]?.title || video.name,
-      problems: video.formatReport?.problems ?? [],
-    }));
 
   return (
     <Console>
@@ -624,10 +556,7 @@ function PlayerPageContent() {
           settings={settings}
           setSettings={setSettings}
           readyPlaylist={readyPlaylist}
-          formatProblems={formatProblems}
           userRole={user.role}
-          playlistChangePending={playlistChangePending}
-          onStreamStarted={handleStreamStarted}
         />
 
         <MediaLibraryPanel
@@ -690,6 +619,7 @@ function PlayerPageContent() {
       {/* ── Playlist ─────────────────────────────────────────────────────────── */}
       <PlaylistPanel
         playlist={playlist}
+        videos={videos}
         sourceLabel={SOURCE_LABELS[settings.playlistSource]}
         draggedId={draggedPlaylistId}
         dragOverId={dragOverPlaylistId}
@@ -704,7 +634,6 @@ function PlayerPageContent() {
         onDragEnd={handlePlaylistDragEnd}
         onToggle={handleTogglePlaylistEntry}
         onRemove={handleRemoveFromPlaylist}
-        StopGuardButton={StopGuardButton}
         statusLabels={VOD_STATUS_LABEL}
       />
     </Console>

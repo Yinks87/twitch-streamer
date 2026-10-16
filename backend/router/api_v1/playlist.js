@@ -1,6 +1,6 @@
 import express from 'express';
 import * as db from '../../db/db.js';
-import { refreshActivePlaylist } from '../../streamManager.js';
+import { refreshActivePlaylist, isCurrentVideo } from '../../streamManager.js';
 import { requireAuth } from '../../middleware/index.js';
 import { readTranscript, transcriptNeedsCategory } from '../../utils/transcript.js';
 
@@ -48,6 +48,11 @@ playlistRouter.post('/playlist', async (req, res) => {
 playlistRouter.delete('/playlist/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
+  const entry = db.getPlaylist().find((e) => e.id === id);
+  if (entry && isCurrentVideo(entry.filename))
+    return res.status(409).json({
+      error: 'Das aktuell laufende Video kann nicht entfernt werden.',
+    });
   db.removePlaylistEntry(id);
   res.json({ ok: true, playlistRefreshed: await refreshRunningPlaylist() });
 });

@@ -3,22 +3,24 @@ import CollapsiblePanel from '../components/CollapsiblePanel';
 import Thumbnail from '../components/Thumbnail';
 import Button from '../components/Button';
 import ViewModeToggle, { useViewMode } from '../components/ViewModeToggle';
+import { useStatusContext } from '../context/StatusContext';
 import {
   VideoGrid,
   VideoTile,
   TileMedia,
   TileOverlay,
-  TileBody,
-  TileTitle,
   TileActions,
   VideoList,
   VideoListItem,
   VideoListName,
   VideoListEmpty,
+  SourceBadge,
 } from '../components/VideoList';
+import { VideoInfo, VideoInfoRow } from '../components/VideoInfo';
 
 export default function PlaylistPanel({
   playlist,
+  videos,
   sourceLabel,
   draggedId,
   dragOverId,
@@ -29,12 +31,16 @@ export default function PlaylistPanel({
   onDragEnd,
   onToggle,
   onRemove,
-  StopGuardButton,
   statusLabels,
   children,
 }) {
   const [viewMode, setViewMode] = useViewMode('playlist');
+  const { status } = useStatusContext();
   const readyPlaylist = playlist?.filter((entry) => entry.status === 'ready');
+  const durationByName = new Map(
+    (videos ?? []).map((video) => [video.name, video.duration]),
+  );
+  const currentVideo = status.running ? status.currentVideo : null;
 
   if (!playlist)
     return (
@@ -93,6 +99,17 @@ export default function PlaylistPanel({
                       : 'Upload'}
                 </SourceBadge>
               );
+              const isCurrent = currentVideo === entry.filename;
+              const nowPlaying = isCurrent && (
+                <NowPlaying
+                  title={status.paused ? 'Pausiert' : 'Läuft gerade'}
+                >
+                  <span className="material-symbols-outlined small">
+                    {status.paused ? 'pause' : 'play_arrow'}
+                  </span>
+                  {status.paused ? 'Pausiert' : 'Läuft'}
+                </NowPlaying>
+              );
               const statusSuffix = entry.status !== 'ready' && (
                 <StatusSuffix>
                   {statusLabels[entry.status] ?? entry.status}
@@ -126,11 +143,21 @@ export default function PlaylistPanel({
                       </span>
                     )}
                   </Button>
-                  <StopGuardButton onClick={() => onRemove(entry.id)}>
+                  <Button
+                    variant="ghost"
+                    danger
+                    onClick={() => onRemove(entry.id)}
+                    disabled={isCurrent}
+                    title={
+                      isCurrent
+                        ? 'Läuft gerade – kann nicht entfernt werden'
+                        : 'Aus der Playlist entfernen'
+                    }
+                  >
                     <span className="material-symbols-outlined small">
                       delete
                     </span>
-                  </StopGuardButton>
+                  </Button>
                 </>
               );
 
@@ -139,21 +166,30 @@ export default function PlaylistPanel({
                   <PlaylistTile
                     key={entry.id}
                     {...dragProps}
+                    title={entry.title}
                     $enabled={effectivelyEnabled}
+                    $current={isCurrent}
                     $dragging={draggedId === entry.id}
                     $dragOver={dragOverId === entry.id}
                   >
                     <TileMedia>
                       <Thumbnail src={thumbSrc} alt="" fluid />
-                      <TileOverlay>{badge}</TileOverlay>
+                      {isCurrent && <TileOverlay>{nowPlaying}</TileOverlay>}
                     </TileMedia>
-                    <TileBody>
-                      <TileTitle title={entry.title}>
-                        {entry.title}
-                        {statusSuffix}
-                      </TileTitle>
+                    <PlaylistInfoRow>
+                      <VideoInfo
+                        active={effectivelyEnabled}
+                        source={entry.source}
+                        duration={durationByName.get(entry.filename)}
+                        addedAt={entry.created_at}
+                        transferredAt={
+                          entry.source === 'upload'
+                            ? null
+                            : entry.twitch_created_at
+                        }
+                      />
                       <TileActions>{actions}</TileActions>
-                    </TileBody>
+                    </PlaylistInfoRow>
                   </PlaylistTile>
                 );
               }
@@ -163,6 +199,7 @@ export default function PlaylistPanel({
                   key={entry.id}
                   {...dragProps}
                   $enabled={effectivelyEnabled}
+                  $current={isCurrent}
                   $dragging={draggedId === entry.id}
                   $dragOver={dragOverId === entry.id}
                 >
@@ -172,6 +209,7 @@ export default function PlaylistPanel({
                     {entry.title}
                     {statusSuffix}
                   </VideoListName>
+                  {nowPlaying}
                   {actions}
                 </PlaylistItem>
               );
@@ -194,12 +232,20 @@ const ViewBar = styled.div`
   margin-bottom: 10px;
 `;
 
+const PlaylistInfoRow = styled(VideoInfoRow)`
+  flex-direction: column;
+  align-items: stretch;
+`;
+
 const PlaylistTile = styled(VideoTile)`
   opacity: ${({ $enabled }) => ($enabled ? 1 : 0.45)};
   cursor: ${({ $dragging }) => ($dragging ? 'grabbing' : 'grab')};
   outline: ${({ $dragOver }) =>
     $dragOver ? '2px solid var(--twitch, #9146ff)' : 'none'};
   outline-offset: -2px;
+  ${({ $current }) =>
+    $current &&
+    'border-color: var(--live); box-shadow: 0 0 0 1px var(--live);'}
 `;
 
 const PlaylistItem = styled(VideoListItem)`
@@ -209,23 +255,25 @@ const PlaylistItem = styled(VideoListItem)`
   outline: ${({ $dragOver }) =>
     $dragOver ? '2px solid var(--twitch, #9146ff)' : 'none'};
   outline-offset: -2px;
+  ${({ $current }) =>
+    $current && 'box-shadow: inset 3px 0 0 var(--live); padding-left: 8px;'}
 `;
 
-const BADGE_COLORS = {
-  vod: '#9147ff',
-  clip: '#3b9eff',
-};
-
-const SourceBadge = styled.span`
-  font-size: 0.7rem;
-  padding: 0.1rem 0.35rem;
-  border-radius: 3px;
-  background: ${({ $kind }) =>
-    BADGE_COLORS[$kind] ? `${BADGE_COLORS[$kind]}22` : '#00000022'};
-  color: ${({ $kind }) => BADGE_COLORS[$kind] ?? 'inherit'};
+const NowPlaying = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   flex-shrink: 0;
-  ${({ $overlay }) =>
-    $overlay && 'background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(2px);'}
+  padding: 0.1rem 0.4rem 0.1rem 0.2rem;
+  border-radius: 3px;
+  background: var(--live);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+
+  .material-symbols-outlined {
+    font-size: 14px;
+  }
 `;
 
 const StatusSuffix = styled.span`

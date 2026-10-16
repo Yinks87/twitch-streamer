@@ -82,11 +82,6 @@ app.listen(PORT, () => {
   console.log(`[APP] Twitch streamer backend listening on port ${PORT}`);
   startAccessTokenValidationLoop();
   connectToTwitchEventSubs();
-  // Background check of all playlist videos: the format status is known (and cached)
-  // before the first stream start or media library request.
-  streamManager
-    .checkPlaylistFormats()
-    .catch((err) => console.error('[FORMAT-CHECK] failed:', err.message));
 });
 
 // ── Twitch channel auto-update on video change ────────────────────────────────
@@ -103,25 +98,36 @@ streamEvents.on('streamStopped', clearPendingTimestamps);
 streamEvents.on('scheduledRestart', async ({ delaySeconds }) => {
   const settings = db.getSettings();
   const user = db.getBroadcasterUser();
-  const message = settings?.chatMessages?.restartMessage;
+  const restartMessage = settings?.chatMessages?.restartMessage;
 
-  if (!user || !settings?.chatMessagesEnabled || !message) return;
+  if (!user || !settings?.chatMessagesEnabled || !restartMessage) return;
 
   await sendChatMessage({
     access_token: user.access_token,
     broadcaster_id: user.twitch_user_id,
     sender_id: user.twitch_user_id,
-    message: parseTemplate(message, { duration: delaySeconds }),
-  })
-    .then((res) => {
-      console.log('restart message sent:', res);
-    })
-    .catch((err) =>
-      console.error(
-        '[scheduled-restart] chat notification error:',
-        err.message,
-      ),
-    );
+    message: parseTemplate(restartMessage, { duration: delaySeconds }),
+  }).catch((err) =>
+    console.error('[scheduled-restart] chat notification error:', err.message),
+  );
+
+});
+
+streamEvents.on('scheduledRestartCompleted', async () => {
+  const settings = db.getSettings();
+  const user = db.getBroadcasterUser();
+  const pinMessage = settings?.chatMessages?.pinMessage;
+
+  if (!user || !settings?.pinMessageEnabled || !pinMessage) return;
+
+  await sendChatMessage({
+    access_token: user.access_token,
+    broadcaster_id: user.twitch_user_id,
+    sender_id: user.twitch_user_id,
+    message: parseTemplate(pinMessage, {}),
+  }).catch((err) =>
+    console.error('[scheduled-restart] pin message error:', err.message),
+  );
 });
 
 streamEvents.on('videoChanged', async (filename, context = {}) => {
@@ -136,17 +142,21 @@ streamEvents.on('videoChanged', async (filename, context = {}) => {
       : [{ time: '00:00:00', category: '', category_id: null, title: '' }];
 
   const user = db.getBroadcasterUser();
-  let settings, chatMessagesEnabled, pinMessageEnabled, chatMessages;
+  let settings, chatMessagesEnabled, chatMessages;
 
   if (!user) return;
 
   const resumed = context.resumed === true;
   const resumeOffset = resumed ? Math.max(0, Number(context.offset) || 0) : 0;
+  // A manual jump to a later timestamp must apply that timestamp's title/category now.
+  const jumpTarget = Number.isInteger(context.jumpTo)
+    ? timestamps[context.jumpTo]
+    : null;
 
   // A reconnect must keep the metadata already active on Twitch. The next
   // transcript marker after the saved offset will apply the next update.
-  if (!resumed) {
-    const first = timestamps[0];
+  if (!resumed || jumpTarget) {
+    const first = jumpTarget ?? timestamps[0];
     await applyChannelUpdate(
       user.access_token,
       first.title || '',
@@ -156,7 +166,6 @@ streamEvents.on('videoChanged', async (filename, context = {}) => {
       .then(async () => {
         settings = db.getSettings();
         chatMessagesEnabled = settings?.chatMessagesEnabled;
-        pinMessageEnabled = settings?.pinMessageEnabled;
         chatMessages = settings?.chatMessages;
 
         if (chatMessagesEnabled) {
@@ -194,7 +203,6 @@ streamEvents.on('videoChanged', async (filename, context = {}) => {
           // Refresh settings before sending chat message
           settings = db.getSettings();
           chatMessagesEnabled = settings?.chatMessagesEnabled;
-          pinMessageEnabled = settings?.pinMessageEnabled;
           chatMessages = settings?.chatMessages;
 
           if (chatMessagesEnabled) {

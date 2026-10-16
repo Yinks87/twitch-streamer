@@ -211,22 +211,27 @@ for (const prefix of ['/videos', '/upload', '/thumbnails', '/storage']) {
   videosRouter.use(prefix, requireAuth);
 }
 
+// filename → { key, duration } so ffprobe only runs again once a file's size/mtime changes
+// (e.g. after a trim).
+const durationCache = new Map();
+
+async function getCachedDuration(name, stat) {
+  const key = `${stat.size}:${stat.mtimeMs}`;
+  const cached = durationCache.get(name);
+  if (cached?.key === key) return cached.duration;
+  let duration = null;
+  try {
+    duration = await probeDuration(path.join(VIDEOS_DIR, name));
+  } catch {
+    // Leave the duration unknown rather than failing the whole listing.
+  }
+  durationCache.set(name, { key, duration });
+  return duration;
+}
+
 videosRouter.get('/videos', async (req, res) => {
   const names = streamManager.listVideoFiles();
-  // Probing is cached per file version; limit parallel ffprobe runs on a cold cache.
-  const formatIssues = new Array(names.length).fill(null);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: 4 }, async () => {
-      while (next < names.length) {
-        const index = next++;
-        formatIssues[index] = await streamManager.getVideoFormatIssues(
-          path.join(VIDEOS_DIR, names[index]),
-        );
-      }
-    }),
-  );
-  const files = names.map((name, index) => {
+  const files = names.map((name) => {
     const stat = fs.statSync(path.join(VIDEOS_DIR, name));
     const transcript = readTranscript(name);
     return {
@@ -239,14 +244,18 @@ videosRouter.get('/videos', async (req, res) => {
       // Legacy files without a stored timestamp fall back to the file's birth time.
       uploadedAt: transcript?.uploadedAt || (stat.birthtime ?? stat.mtime),
       transcript,
-      // Why the video can't be streamed (empty = fine, null = not checkable), and the
-      // same in plain language for the dashboard.
-      formatIssues: formatIssues[index],
-      formatReport: formatIssues[index]?.length
-        ? explainFormatIssues(formatIssues[index])
-        : null,
+      stat,
     };
   });
+  const BATCH = 6;
+  for (let i = 0; i < files.length; i += BATCH) {
+    await Promise.all(
+      files.slice(i, i + BATCH).map(async (file) => {
+        file.duration = await getCachedDuration(file.name, file.stat);
+      }),
+    );
+  }
+  for (const file of files) delete file.stat;
   res.json({ videos: files, storage: getStorageStatus() });
 });
 
@@ -395,12 +404,14 @@ function convertUpload({ entryId, filename, title, staged, destination }) {
       if (!activeDownloads.has(id)) return; // cancelled, artifacts already removed
       await renameWithRetry(staged, destination);
       activeDownloads.delete(id);
-      if (entryId !== null) db.updatePlaylistEntry(entryId, { status: 'ready' });
+      if (entryId !== null)
+        db.updatePlaylistEntry(entryId, { status: 'ready' });
     } catch (err) {
       console.error(`[upload] could not finish ${filename}: ${err.message}`);
       activeDownloads.delete(id);
       fs.rmSync(staged, { force: true });
-      if (entryId !== null) db.updatePlaylistEntry(entryId, { status: 'error' });
+      if (entryId !== null)
+        db.updatePlaylistEntry(entryId, { status: 'error' });
     }
   })();
 }
@@ -415,61 +426,57 @@ videosRouter.use((err, req, res, next) => {
 // Converts a library video that is not in the common streaming format, in place: the
 // result is built in the staging dir and only replaces the original once it is complete,
 // so a failed or cancelled conversion leaves the video untouched.
-videosRouter.post(
-  '/videos/:name/convert',
-  requireAuth,
-  async (req, res) => {
-    const name = path.basename(req.params.name);
-    const filePath = path.join(VIDEOS_DIR, name);
-    if (!fs.existsSync(filePath))
-      return res.status(404).json({ error: 'File not found' });
-    if (
-      trimsActive.has(name) ||
-      [...activeDownloads.values()].some((job) => job.filename === name)
-    )
-      return res
-        .status(409)
-        .json({ error: 'Das Video wird gerade verarbeitet.' });
-    const streams = await probeStreams(filePath);
-    if (!streams)
-      return res.status(422).json({ error: 'Das Video ist nicht lesbar.' });
-    const issues = getFormatIssues(streams);
-    if (issues.length === 0) return res.json({ converting: false, issues });
-    if (!streams.some((s) => s.codec_type === 'video'))
-      return res.status(422).json({ error: 'Das Video hat keine Bildspur.' });
+videosRouter.post('/videos/:name/convert', requireAuth, async (req, res) => {
+  const name = path.basename(req.params.name);
+  const filePath = path.join(VIDEOS_DIR, name);
+  if (!fs.existsSync(filePath))
+    return res.status(404).json({ error: 'File not found' });
+  if (
+    trimsActive.has(name) ||
+    [...activeDownloads.values()].some((job) => job.filename === name)
+  )
+    return res
+      .status(409)
+      .json({ error: 'Das Video wird gerade verarbeitet.' });
+  const streams = await probeStreams(filePath);
+  if (!streams)
+    return res.status(422).json({ error: 'Das Video ist nicht lesbar.' });
+  const issues = getFormatIssues(streams);
+  if (issues.length === 0) return res.json({ converting: false, issues });
+  if (!streams.some((s) => s.codec_type === 'video'))
+    return res.status(422).json({ error: 'Das Video hat keine Bildspur.' });
 
-    const id = nextJobId();
-    const transcript = readTranscript(name);
-    activeDownloads.set(id, {
-      process: null,
-      progress: 100,
-      speed: '',
-      eta: '',
-      phase: 'waiting',
-      filename: name,
-      title: transcript?.timestamps?.[0]?.title || name,
-      kind: 'convert',
-    });
-    (async () => {
-      try {
-        await normalizeStagedFile(id, filePath, {
-          stagingDir: DOWNLOADS_STAGING_DIR,
-          // A preview stream holding the file open would block replacing it on Windows.
-          beforeReplace: () => closeActiveStreamReaders(name),
-          throwOnError: true,
-        });
-      } catch (err) {
-        console.error(`[convert] ${name} failed: ${err.message}`);
-      } finally {
-        activeDownloads.delete(id);
-        fs.rmSync(path.join(DOWNLOADS_STAGING_DIR, `${name}.normalized.mp4`), {
-          force: true,
-        });
-      }
-    })();
-    res.status(202).json({ converting: true, issues });
-  },
-);
+  const id = nextJobId();
+  const transcript = readTranscript(name);
+  activeDownloads.set(id, {
+    process: null,
+    progress: 100,
+    speed: '',
+    eta: '',
+    phase: 'waiting',
+    filename: name,
+    title: transcript?.timestamps?.[0]?.title || name,
+    kind: 'convert',
+  });
+  (async () => {
+    try {
+      await normalizeStagedFile(id, filePath, {
+        stagingDir: DOWNLOADS_STAGING_DIR,
+        // A preview stream holding the file open would block replacing it on Windows.
+        beforeReplace: () => closeActiveStreamReaders(name),
+        throwOnError: true,
+      });
+    } catch (err) {
+      console.error(`[convert] ${name} failed: ${err.message}`);
+    } finally {
+      activeDownloads.delete(id);
+      fs.rmSync(path.join(DOWNLOADS_STAGING_DIR, `${name}.normalized.mp4`), {
+        force: true,
+      });
+    }
+  })();
+  res.status(202).json({ converting: true, issues });
+});
 
 videosRouter.put('/videos/:name/transcript', (req, res) => {
   const name = path.basename(req.params.name);
@@ -605,11 +612,9 @@ async function runTrim(name, filePath, req, res, state) {
   try {
     duration = await probeDuration(filePath);
   } catch (err) {
-    return res
-      .status(500)
-      .json({
-        error: `Videolänge konnte nicht ermittelt werden: ${err.message}`,
-      });
+    return res.status(500).json({
+      error: `Videolänge konnte nicht ermittelt werden: ${err.message}`,
+    });
   }
 
   const removed = mergeRanges(
@@ -817,7 +822,20 @@ function regenerateThumbnail(name, videoPath) {
   return new Promise((resolve) => {
     const proc = spawn(
       FFMPEG_PATH,
-      ['-ss', '0', '-i', videoPath, '-vframes', '1', '-vf', 'scale=320:-1', '-f', 'image2', '-y', thumbPath],
+      [
+        '-ss',
+        '0',
+        '-i',
+        videoPath,
+        '-vframes',
+        '1',
+        '-vf',
+        'scale=320:-1',
+        '-f',
+        'image2',
+        '-y',
+        thumbPath,
+      ],
       { stdio: 'ignore' },
     );
     proc.on('exit', resolve);
@@ -835,6 +853,10 @@ videosRouter.get('/videos/:name/trim-progress', (req, res) => {
 videosRouter.delete('/videos/:name', (req, res) => {
   const name = path.basename(req.params.name);
   const filePath = path.join(VIDEOS_DIR, name);
+  if (streamManager.isCurrentVideo(name))
+    return res.status(409).json({
+      error: 'Das aktuell laufende Video kann nicht gelöscht werden.',
+    });
   if (!fs.existsSync(filePath))
     return res.status(404).json({ error: 'File not found' });
   fs.unlinkSync(filePath);

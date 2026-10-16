@@ -129,6 +129,14 @@ export const api = {
   startStream: () =>
     apiClient.post(`/stream/start`, {}).then((res) => res.data),
   stopStream: () => apiClient.post(`/stream/stop`, {}).then((res) => res.data),
+  skipStream: () => apiClient.post(`/stream/skip`, {}).then((res) => res.data),
+  previousStream: () =>
+    apiClient.post(`/stream/previous`, {}).then((res) => res.data),
+  pauseStream: () => apiClient.post(`/stream/pause`, {}).then((res) => res.data),
+  resumeStream: () =>
+    apiClient.post(`/stream/resume`, {}).then((res) => res.data),
+  nextTimestampStream: () =>
+    apiClient.post(`/stream/next-timestamp`, {}).then((res) => res.data),
 
   // Stream logs (admin only)
   getLogFiles: () => apiClient.get(`/stream/logs`).then((res) => res.data),

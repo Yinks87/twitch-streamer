@@ -43,6 +43,24 @@ export const VideoListEmpty = styled.li`
   padding: 8px 0;
 `;
 
+const BADGE_COLORS = {
+  vod: '#9147ff',
+  clip: '#3b9eff',
+};
+
+// Colored VOD / Clip / Upload badge shared by the Playlist and Mediathek panels.
+export const SourceBadge = styled.span`
+  font-size: 0.7rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: ${({ $kind }) =>
+    BADGE_COLORS[$kind] ? `${BADGE_COLORS[$kind]}22` : '#00000022'};
+  color: ${({ $kind }) => BADGE_COLORS[$kind] ?? 'inherit'};
+  flex-shrink: 0;
+  ${({ $overlay }) =>
+    $overlay && 'background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(2px);'}
+`;
+
 // -- Tile ("Kachel") view -----------------------------------------------------
 export const VideoGrid = styled.ul`
   list-style: none;

@@ -138,6 +138,26 @@ streamRouter.post(
   },
 );
 
+for (const [action, handler] of [
+  ['skip', streamManager.skipTrack],
+  ['previous', streamManager.previousTrack],
+  ['pause', streamManager.pauseStream],
+  ['resume', streamManager.resumeStream],
+  ['next-timestamp', streamManager.nextTimestamp],
+]) {
+  streamRouter.post(
+    `/stream/${action}`,
+    requireAuth(['admin', 'broadcaster']),
+    (req, res) => {
+      try {
+        res.json(handler());
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    },
+  );
+}
+
 streamRouter.get('/health', (req, res) => res.json({ ok: true }));
 
 export default streamRouter;

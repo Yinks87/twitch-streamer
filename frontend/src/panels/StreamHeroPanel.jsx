@@ -54,10 +54,7 @@ const StreamHeroPanel = ({
   settings,
   setSettings,
   readyPlaylist,
-  formatProblems = [],
   userRole,
-  playlistChangePending,
-  onStreamStarted,
 }) => {
   const { status, setStatus } = useStatusContext();
   const { showAlert } = useAlert();
@@ -68,7 +65,6 @@ const StreamHeroPanel = ({
     try {
       const data = await api.startStream();
       setStatus(data);
-      onStreamStarted?.();
     } catch (err) {
       showAlert({ severity: 'error', message: err.message });
     } finally {
@@ -81,6 +77,17 @@ const StreamHeroPanel = ({
     try {
       const data = await api.stopStream();
       setStatus(data);
+    } catch (err) {
+      showAlert({ severity: 'error', message: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTransport(action) {
+    setBusy(true);
+    try {
+      setStatus(await action());
     } catch (err) {
       showAlert({ severity: 'error', message: err.message });
     } finally {
@@ -114,11 +121,9 @@ const StreamHeroPanel = ({
     : null;
 
   const segment = status.running ? status.currentSegment : null;
-  // While streaming, what the running start actually left out; otherwise what the next
-  // start would leave out (derived from the media library's format check).
-  const skippedVideos = status.running
-    ? (status.skippedVideos ?? [])
-    : formatProblems;
+  const hasNextTimestamp = Boolean(segment) && segment.index + 1 < segment.total;
+  // Videos the running stream had to skip (e.g. playback failed).
+  const skippedVideos = status.skippedVideos ?? [];
 
   return (
     <CollapsiblePanel
@@ -147,6 +152,7 @@ const StreamHeroPanel = ({
               <>
                 Läuft seit <Uptime startedAt={status.startedAt} /> · PID{' '}
                 {status.pid ?? '–'}
+                {status.paused ? ' · Pausiert' : ''}
                 {connectionLabel && status.health !== 'ok'
                   ? ` · ${connectionLabel}`
                   : ''}
@@ -170,29 +176,16 @@ const StreamHeroPanel = ({
           {skippedVideos.length > 0 && (
             <SkippedNotice role="alert">
               <strong>
-                {skippedVideos.length} Video(s){' '}
-                {status.running
-                  ? 'werden nicht gestreamt'
-                  : 'werden beim Start nicht gestreamt'}
+                {skippedVideos.length} Video(s) wurden übersprungen
               </strong>
               <ul>
                 {skippedVideos.map((skipped) => (
                   <li key={skipped.filename}>
                     <b>{skipped.title}</b>
-                    {skipped.problems.map((problem) => (
-                      <div key={problem.issue}>
-                        {problem.reason}
-                        {problem.fix && <em> → {problem.fix}</em>}
-                      </div>
-                    ))}
+                    {skipped.reason && <div>{skipped.reason}</div>}
                   </li>
                 ))}
               </ul>
-              <span>
-                Umwandeln lässt sich das in der Mediathek: Video aufklappen und
-                „In Streamformat umwandeln“ wählen. Es läuft ab dem nächsten
-                Start der Playlist mit.
-              </span>
             </SkippedNotice>
           )}
         </HeroBody>
@@ -255,9 +248,61 @@ const StreamHeroPanel = ({
               />
             </LoopToggle>
             {status.running ? (
-              <Button variant="stop" onClick={handleStop} disabled={busy}>
-                <span className="material-symbols-outlined">stop_circle</span>
-              </Button>
+              <>
+                <TransportRow>
+                  <Button
+                    variant="ghost"
+                    title="Vorheriges Video"
+                    aria-label="Vorheriges Video"
+                    onClick={() => handleTransport(api.previousStream)}
+                    disabled={busy}
+                  >
+                    <span className="material-symbols-outlined">
+                      skip_previous
+                    </span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    title={status.paused ? 'Fortsetzen' : 'Pausieren'}
+                    aria-label={status.paused ? 'Fortsetzen' : 'Pausieren'}
+                    onClick={() =>
+                      handleTransport(
+                        status.paused ? api.resumeStream : api.pauseStream,
+                      )
+                    }
+                    disabled={busy}
+                  >
+                    <span className="material-symbols-outlined">
+                      {status.paused ? 'play_arrow' : 'pause'}
+                    </span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    title="Nächstes Video"
+                    aria-label="Nächstes Video"
+                    onClick={() => handleTransport(api.skipStream)}
+                    disabled={busy}
+                  >
+                    <span className="material-symbols-outlined">
+                      skip_next
+                    </span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    title="Zum nächsten Zeitstempel im aktuellen Video"
+                    aria-label="Zum nächsten Zeitstempel"
+                    onClick={() => handleTransport(api.nextTimestampStream)}
+                    disabled={busy || !hasNextTimestamp}
+                  >
+                    <span className="material-symbols-outlined">
+                      fast_forward
+                    </span>
+                  </Button>
+                </TransportRow>
+                <Button variant="stop" onClick={handleStop} disabled={busy}>
+                  <span className="material-symbols-outlined">stop_circle</span>
+                </Button>
+              </>
             ) : (
               <Button
                 variant="start"
@@ -296,16 +341,6 @@ const StreamHeroPanel = ({
         )} */}
       </HeroControls>
 
-      {playlistChangePending && (
-        <div
-          style={{ display: 'flex', width: '100%', justifyContent: 'center' }}
-        >
-          <PlaylistChangeNotice role="status">
-            Änderungen in der Playlist werden beim nächsten Stream Start{' '}
-            <b>ODER</b> beim nächsten Loop wirksam
-          </PlaylistChangeNotice>
-        </div>
-      )}
       {status.log && status.log.length > 0 && (
         <LogDrawer>
           <summary>ffmpeg-Log</summary>
@@ -425,13 +460,9 @@ const SkippedNotice = styled.div`
   }
 `;
 
-const PlaylistChangeNotice = styled.div`
-  margin-top: 0.75rem;
-  padding: 0.65rem 0.8rem;
-  border: 1px solid var(--signal);
-  border-radius: 6px;
-  color: var(--signal);
-  font-size: 0.85rem;
+const TransportRow = styled.div`
+  display: flex;
+  gap: 0.5rem;
 `;
 
 const HeroControls = styled.div`
