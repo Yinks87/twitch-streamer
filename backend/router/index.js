@@ -6,6 +6,7 @@ import playlistRouter from './api_v1/playlist.js';
 import settingsRouter from './api_v1/settings.js';
 import streamRouter from './api_v1/stream.js';
 import usersRouter from './api_v1/users.js';
+import chatCommandsRouter from './api_v1/chat-commands.js';
 
 const baseRouter = express.Router();
 
@@ -16,6 +17,7 @@ baseRouter.use('/api/v1', playlistRouter);
 baseRouter.use('/api/v1', settingsRouter);
 baseRouter.use('/api/v1', streamRouter);
 baseRouter.use('/api/v1', usersRouter);
+baseRouter.use('/api/v1', chatCommandsRouter);
 
 export default baseRouter;
 

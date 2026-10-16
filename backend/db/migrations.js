@@ -63,6 +63,16 @@ const migrations = [
           created_at TEXT    NOT NULL DEFAULT (datetime('now')),
           twitch_created_at TEXT DEFAULT ''
         );
+
+        CREATE TABLE IF NOT EXISTS chat_commands (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          name             TEXT    NOT NULL UNIQUE,
+          response         TEXT    NOT NULL,
+          enabled          INTEGER NOT NULL DEFAULT 1,
+          required_role    TEXT    NOT NULL DEFAULT 'user',
+          cooldown_seconds INTEGER NOT NULL DEFAULT 5,
+          created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
       `);
     },
   },
@@ -134,6 +144,24 @@ const migrations = [
         .map((column) => column.name);
       if (!playlistColumns.includes('twitch_created_at'))
         db.exec('ALTER TABLE playlist ADD COLUMN twitch_created_at TEXT');
+    },
+  },
+
+  {
+    version: 6,
+    name: 'add_chat_commands',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_commands (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          name             TEXT    NOT NULL UNIQUE,
+          response         TEXT    NOT NULL,
+          enabled          INTEGER NOT NULL DEFAULT 1,
+          required_role    TEXT    NOT NULL DEFAULT 'user',
+          cooldown_seconds INTEGER NOT NULL DEFAULT 5,
+          created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
     },
   },
 

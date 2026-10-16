@@ -547,7 +547,8 @@ export function getStatus() {
   }
   return {
     running,
-    reconnecting: !running && Boolean(relaunchTimer),
+    reconnecting: !running && Boolean(activeStreamConfig),
+    scheduledRestarting: scheduledRestartPending,
     health,
     twitchCheckedAt: twitchHealth.checkedAt,
     startedAt,
@@ -629,6 +630,19 @@ export function resumeStream() {
   return getStatus();
 }
 
+// Info about the video that is on air right now, for chat command templates.
+export function getCurrentVideoInfo() {
+  if (!isRunning() || !currentVideoFilename) return null;
+  const entry = db.getPlaylistEntryByFilename(currentVideoFilename);
+  const segment = getCurrentSegment();
+  return {
+    title: segment?.title || entry?.title || '',
+    category: segment?.category || '',
+    twitchCreatedAt: entry?.twitch_created_at || null,
+    createdAt: entry?.created_at || null,
+  };
+}
+
 // True while `filename` is the video currently on air; used to protect it from deletion.
 export function isCurrentVideo(filename) {
   return isRunning() && currentVideoFilename === filename;
@@ -688,6 +702,11 @@ async function startStreamUnlocked({
   resumeFrom = null,
 }) {
   if (!streamKey) throw new Error('No Twitch stream key configured.');
+  // During a restart the stream relaunches on its own; a manual start would skip the delay.
+  if (activeStreamConfig && !isRunning())
+    throw new Error(
+      'Der Stream wird gerade neu gestartet. Bitte warten oder zuerst stoppen.',
+    );
   startGeneration++;
   const generation = startGeneration;
   clearRelaunchTimer();

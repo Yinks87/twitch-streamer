@@ -1,6 +1,7 @@
 import { getTwitchUserRole, hasPermission } from '../lib.js';
 import * as db from '../../db/db.js';
 import { pinChatMessage } from '../api.js';
+import { handleChatCommand } from '../chat-commands.js';
 
 export async function handleChatMessage(eventSub) {
   const event = eventSub.event;
@@ -16,6 +17,8 @@ export async function handleChatMessage(eventSub) {
     broadcaster_user_id !== source_broadcaster_user_id
   )
     return;
+
+  if (await handleChatCommand(event)) return;
 
   if (msgPinEnabled && message === msgToPin) {
     await pinChatMessage(event.message_id);

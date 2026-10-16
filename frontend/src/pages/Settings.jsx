@@ -13,6 +13,7 @@ import {
 } from '../components/ConsoleLayout';
 import LogsPanel from '../panels/LogsPanel';
 import TwitchMessagesPanel from '../panels/TwitchMessagesPanel';
+import ChatCommandsPanel from '../panels/ChatCommandsPanel';
 import { isDirtyCheck } from '../utils/isDirtyCheck';
 import PageLoading from '../components/PageLoading';
 
@@ -214,6 +215,9 @@ export default function Settings() {
             isDirty={isTwitchMessagesDirty}
             savingSettings={savingSettings}
           />
+        )}
+        {(user.role === 'broadcaster' || user.role === 'admin') && (
+          <ChatCommandsPanel />
         )}
         {/* ── Stream logs (admin only) ─────────────────────────────────────────── */}
         <LogsPanel userRole={user.role} />

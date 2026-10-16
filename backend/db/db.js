@@ -404,6 +404,79 @@ export function getPlaylistEntryByVodId(vodId) {
   );
 }
 
+// --- Chat commands ---
+
+function mapChatCommand(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    response: row.response,
+    enabled: row.enabled === 1,
+    requiredRole: row.required_role,
+    cooldownSeconds: row.cooldown_seconds,
+  };
+}
+
+export function getChatCommands() {
+  return db
+    .prepare('SELECT * FROM chat_commands ORDER BY name COLLATE NOCASE')
+    .all()
+    .map(mapChatCommand);
+}
+
+export function getChatCommandByName(name) {
+  const row = db
+    .prepare('SELECT * FROM chat_commands WHERE name = ?')
+    .get(name);
+  return row ? mapChatCommand(row) : null;
+}
+
+export function addChatCommand({
+  name,
+  response,
+  enabled = true,
+  requiredRole = 'user',
+  cooldownSeconds = 5,
+}) {
+  const result = db
+    .prepare(
+      'INSERT INTO chat_commands (name, response, enabled, required_role, cooldown_seconds) VALUES (?, ?, ?, ?, ?)',
+    )
+    .run(name, response, enabled ? 1 : 0, requiredRole, cooldownSeconds);
+  return mapChatCommand(
+    db
+      .prepare('SELECT * FROM chat_commands WHERE id = ?')
+      .get(result.lastInsertRowid),
+  );
+}
+
+export function updateChatCommand(id, fields) {
+  const columns = {
+    name: 'name',
+    response: 'response',
+    enabled: 'enabled',
+    requiredRole: 'required_role',
+    cooldownSeconds: 'cooldown_seconds',
+  };
+  const keys = Object.keys(fields).filter((key) => key in columns);
+  if (keys.length > 0) {
+    db.prepare(
+      `UPDATE chat_commands SET ${keys.map((key) => `${columns[key]} = ?`).join(', ')} WHERE id = ?`,
+    ).run(
+      ...keys.map((key) =>
+        key === 'enabled' ? (fields[key] ? 1 : 0) : fields[key],
+      ),
+      id,
+    );
+  }
+  const row = db.prepare('SELECT * FROM chat_commands WHERE id = ?').get(id);
+  return row ? mapChatCommand(row) : null;
+}
+
+export function removeChatCommand(id) {
+  return db.prepare('DELETE FROM chat_commands WHERE id = ?').run(id).changes > 0;
+}
+
 // Exposed for server.js raw queries when needed.
 // Returns the most-recently-active user (single-streamer app).
 export function getAnyUser() {

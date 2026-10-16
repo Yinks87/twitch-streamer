@@ -136,7 +136,9 @@ const StreamHeroPanel = ({
         <HeroBody>
           <HeroState>
             {status.reconnecting
-              ? 'Verbindung verloren'
+              ? status.scheduledRestarting
+                ? 'Geplanter Neustart'
+                : 'Verbindung verloren'
               : connectionProblem
                 ? 'Verbindungsproblem'
                 : status.running
@@ -146,9 +148,11 @@ const StreamHeroPanel = ({
                     : 'Bereit'}
           </HeroState>
           <HeroDetail>
-            {status.reconnecting ? (
-              'Stream wird neu verbunden…'
-            ) : status.running ? (
+            {status.reconnecting
+              ? status.scheduledRestarting
+                ? 'Stream wird gleich automatisch neu gestartet…'
+                : 'Stream wird neu verbunden…'
+              : status.running ? (
               <>
                 Läuft seit <Uptime startedAt={status.startedAt} /> · PID{' '}
                 {status.pid ?? '–'}
@@ -216,7 +220,7 @@ const StreamHeroPanel = ({
             <LoopToggle>
               <Checkbox
                 checked={!!settings.loopPlaylist}
-                disabled={status.running}
+                disabled={status.running || status.reconnecting}
                 title="Wiederholt die Playlist endlos, solange der Stream läuft."
                 onChange={async (e) => {
                   const loopPlaylist = e.target.checked;
@@ -233,7 +237,7 @@ const StreamHeroPanel = ({
             <LoopToggle>
               <Checkbox
                 checked={!!settings.shuffleMode}
-                disabled={status.running}
+                disabled={status.running || status.reconnecting}
                 title="Shuffle die Playlist bei jedem Stream-Start oder bei jedem neuen Loop Beginn."
                 onChange={async (e) => {
                   const shuffleMode = e.target.checked;
@@ -303,6 +307,15 @@ const StreamHeroPanel = ({
                   <span className="material-symbols-outlined">stop_circle</span>
                 </Button>
               </>
+            ) : status.reconnecting ? (
+              <Button
+                variant="stop"
+                title="Neustart abbrechen und Stream stoppen"
+                onClick={handleStop}
+                disabled={busy}
+              >
+                <span className="material-symbols-outlined">stop_circle</span>
+              </Button>
             ) : (
               <Button
                 variant="start"

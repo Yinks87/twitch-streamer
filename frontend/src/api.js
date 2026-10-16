@@ -34,6 +34,16 @@ export const api = {
   removeManager: (id) =>
     apiClient.delete(`/users/managers/${id}`).then((res) => res.data),
 
+  // Chat commands
+  getChatCommands: () =>
+    apiClient.get(`/chat-commands`).then((res) => res.data),
+  addChatCommand: (command) =>
+    apiClient.post(`/chat-commands`, command).then((res) => res.data),
+  updateChatCommand: (id, fields) =>
+    apiClient.patch(`/chat-commands/${id}`, fields).then((res) => res.data),
+  removeChatCommand: (id) =>
+    apiClient.delete(`/chat-commands/${id}`).then((res) => res.data),
+
   // Videos
   getVideos: () => apiClient.get(`/videos`).then((res) => res.data),
   checkStorage: (bytes = 0) =>
